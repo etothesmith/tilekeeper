@@ -1,0 +1,25 @@
+{
+ "name": "Tilekeeper",
+ "short_name": "Tilekeeper",
+ "description": "Mark the tiles, capture the cubes, save the floating worlds.",
+ "start_url": ".",
+ "scope": ".",
+ "display": "standalone",
+ "orientation": "portrait",
+ "background_color": "#0b1916",
+ "theme_color": "#0b1916",
+ "icons": [
+  {
+   "src": "assets/promo/app_icon_192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any maskable"
+  },
+  {
+   "src": "assets/promo/app_icon_512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any maskable"
+  }
+ ]
+}
