@@ -2041,8 +2041,13 @@ function showFail() {
 }
 
 // ---------- Kip movement ----------
+// Kip glides between tiles: a step eases in only when he starts from a standstill and eases out only when he'll stop;
+// while more steps are lined up (held joystick, a tap-to-walk path, quick swipes) the motion stays at an even speed.
+const pendingMoves = k => k.queue.length > 0 || !!(k.path && k.path.length) || !!(typeof joyPtr !== "undefined" && joyPtr && joyPtr.dir);
+function stepCurve(t, s0, s1) { const t2 = t * t, t3 = t2 * t; return (-2 * t3 + 3 * t2) + s0 * (t3 - 2 * t2 + t) + s1 * (t3 - t2); }
 function kipPos() {
-  const k = G.kip, e = ease(clamp(k.mt, 0, 1));
+  const k = G.kip, t = clamp(k.mt, 0, 1);
+  const e = k.sliding || k.belt ? t : stepCurve(t, k.s0 || 0, k.s1 || 0);
   return { c: k.pc + (k.c - k.pc) * e, r: k.pr + (k.r - k.pr) * e };
 }
 function queueStep(dc, dr) {
@@ -2060,6 +2065,10 @@ function tryStep(dc, dr) {
   if (tc < 0 || tc >= G.W || tr < 0 || tr >= G.L || blocked(tc, tr)) { k.bump = 90; k.bumpDir = { dc, dr }; k.queue.length = 0; return; }
   leftTile(k.c, k.r);
   k.pc = k.c; k.pr = k.r; k.c = tc; k.r = tr; k.mt = 0;
+  k.s0 = k.cont ? 1 : 0; k.cont = false;
+  // holding the joystick: line up the next step now so there's no pause at the tile
+  if (typeof joyPtr !== "undefined" && joyPtr && joyPtr.dir && !k.queue.length) k.queue.push({ dc: joyPtr.dir.dc, dr: joyPtr.dir.dr });
+  k.s1 = pendingMoves(k) ? 1 : 0;
   if (k.sliding) SFX.slide(); else { SFX.step(); addFx("dust", k.pc, k.pr, 380); }
 }
 // crumble tiles give way the second time Kip steps off them
@@ -2099,12 +2108,20 @@ function updateKip(dt) {
   const k = G.kip;
   if (k.mt < 1) {
     const stepMs = k.sliding ? 75 : k.belt ? SHIFT_MS : G.mods.sprintMs > 0 ? 60 : STEP_MS;
-    k.mt = Math.min(1, k.mt + dt / stepMs);
-    if (k.mt >= 1) k.belt = false;
-    if (k.mt >= 1 && !arrive()) {
-      if (k.markQueued) { k.markQueued = false; actionButton(); }
-      if (k.queue.length) { const s = k.queue.shift(); tryStep(s.dc, s.dr); }
-      else if (k.path && k.path.length) { const s = k.path.shift(); const c0 = k.c, r0 = k.r; tryStep(s.dc, s.dr); if (k.c === c0 && k.r === r0) k.path = null; }
+    k.mt += dt / stepMs;
+    // a step that gets lined up early in the current one keeps the glide going
+    if (!k.s1 && k.mt < 0.35 && pendingMoves(k)) k.s1 = 1;
+    if (k.mt >= 1) {
+      const over = (k.mt - 1) * stepMs;     // carry leftover time into the next step: no hitch at the tile
+      k.mt = 1; k.belt = false;
+      if (!arrive()) {
+        if (k.markQueued) { k.markQueued = false; actionButton(); }
+        k.cont = true;
+        if (k.queue.length) { const s = k.queue.shift(); tryStep(s.dc, s.dr); }
+        else if (k.path && k.path.length) { const s = k.path.shift(); const c0 = k.c, r0 = k.r; tryStep(s.dc, s.dr); if (k.c === c0 && k.r === r0) k.path = null; }
+        k.cont = false;
+        if (k.mt < 1 && over > 0) k.mt = Math.min(0.5, over / (G.mods.sprintMs > 0 ? 60 : STEP_MS));
+      }
     }
   }
   if (k.mt < 1 || k.queue.length) k.walkClock = (k.walkClock || 0) + dt;
@@ -3298,7 +3315,7 @@ function applyControls() {
 function joyDir(dx, dy) { if (Math.hypot(dx, dy) < 14) return null; return Math.abs(dx) > Math.abs(dy) ? { dc: Math.sign(dx), dr: 0 } : { dc: 0, dr: Math.sign(dy) }; }
 function joyStep() {
   if (!joyPtr || !joyPtr.dir) return;
-  if (G && G.kip.mt >= 1 && !G.kip.queue.length) queueStep(joyPtr.dir.dc, joyPtr.dir.dr);
+  if (G && !G.kip.queue.length) queueStep(joyPtr.dir.dc, joyPtr.dir.dr);
 }
 joy.addEventListener("pointerdown", e => {
   e.preventDefault(); e.stopPropagation(); ensureAudio();
@@ -3634,7 +3651,7 @@ function showResult({ stars, BR, newBest, cleared }) {
 }
 
 // test hook for automated checks; only exists when the page URL contains "debug"
-if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, collapseRow, addSpill, actionButton, walkTo, applyControls, forceMark: (c, r) => { G.mark = { c, r, placed: 0, under: null }; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
+if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, collapseRow, addSpill, actionButton, walkTo, kipPos, applyControls, forceMark: (c, r) => { G.mark = { c, r, placed: 0, under: null }; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
 
 // ---------- Offline play: a service worker caches the game after the first visit (skipped where it isn't allowed) ----------
 try { if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) {}
