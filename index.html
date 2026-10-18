@@ -551,6 +551,20 @@ const ART = {
   anim_victory: "assets/kip/kip_victory.webp",
   anim_fall: "assets/kip/kip_fall.webp",
   anim_crushed: "assets/kip/kip_crushed.webp",
+  anim_run_up: "assets/kip/kip_run_up.webp",
+  anim_run_down: "assets/kip/kip_run_down.webp",
+  anim_run_left: "assets/kip/kip_run_left.webp",
+  anim_run_right: "assets/kip/kip_run_right.webp",
+  anim_run_upleft: "assets/kip/kip_run_upleft.webp",
+  anim_run_upright: "assets/kip/kip_run_upright.webp",
+  anim_run_downleft: "assets/kip/kip_run_downleft.webp",
+  anim_run_downright: "assets/kip/kip_run_downright.webp",
+  anim_skid_up: "assets/kip/kip_skid_up.webp",
+  anim_skid_down: "assets/kip/kip_skid_down.webp",
+  anim_skid_left: "assets/kip/kip_skid_left.webp",
+  anim_skid_right: "assets/kip/kip_skid_right.webp",
+  anim_idle_down: "assets/kip/kip_idle_down.webp",
+  anim_idle_up: "assets/kip/kip_idle_up.webp",
   bg_far: "assets/bg/bg_w1_far.webp",
   bg_mid: "assets/bg/bg_w1_mid.webp",
   bg_near: "assets/bg/bg_w1_near.webp",
@@ -658,7 +672,7 @@ const THEME = {
 const theme = () => THEME[LV.world] || THEME[1];
 // Kip strips: 160x168 cells, feet on y=160, standing Kip is 146px tall
 const KIP_CELL = { w: 160, h: 168, base: 160, stand: 146 };
-const KIP_FRAMES = { walk_up: 6, walk_down: 4, walk_left: 6, walk_right: 6, mark: 4, victory: 8, fall: 5, crushed: 5 };
+const KIP_FRAMES = { walk_up: 6, walk_down: 4, walk_left: 6, walk_right: 6, run_up: 8, run_down: 8, run_left: 8, run_right: 8, run_upleft: 8, run_upright: 8, run_downleft: 8, run_downright: 8, skid_up: 4, skid_down: 4, skid_left: 4, skid_right: 4, idle_down: 6, idle_up: 6, mark: 4, victory: 8, fall: 5, crushed: 5 };
 const IMG = {};
 for (const [key, src] of Object.entries(ART)) {
   const im = new Image();
@@ -2118,6 +2132,7 @@ function slideAxis(k, ax, d) {
   }
   if (ax === "x") k.x = lim; else k.y = lim;
 }
+const RUN8 = ["right", "downright", "down", "downleft", "left", "upleft", "up", "upright"];
 function freeMove(dt) {
   const k = G.kip;
   k.stepMs = runStepMs();
@@ -2136,6 +2151,10 @@ function freeMove(dt) {
   k.vx = (k.vx || 0) + (tx - (k.vx || 0)) * f;
   k.vy = (k.vy || 0) + (ty - (k.vy || 0)) * f;
   const sp = Math.hypot(k.vx, k.vy);
+  // letting go at speed plays the skid; pushing again cancels it
+  if (tx || ty) k.skid = null;
+  else if (k.hadInput && sp > vmax * 0.55 && !k.skid) k.skid = { t: 0, dir: k.face.dr < 0 ? "up" : k.face.dr > 0 ? "down" : k.face.dc < 0 ? "left" : "right" };
+  k.hadInput = !!(dir && (tx || ty));
   if (!tx && !ty && sp < vmax * 0.05) { k.vx = k.vy = 0; k.pushing = false; return; }
   const ox = k.x, oy = k.y, dx = k.vx * dt, dy = k.vy * dt;
   // light lane assist only when running nearly straight along a row or column
@@ -2152,6 +2171,14 @@ function freeMove(dt) {
   }
   const moved = Math.hypot(k.x - ox, k.y - oy);
   k.running = moved > vmax * dt * 0.12;
+  if (k.running) {
+    k.runDist = (k.runDist || 0) + moved;
+    // pick one of 8 run sheets from the on-screen heading, sticking with the current one near the borders
+    const ang = Math.atan2((k.y - oy) * RH, (k.x - ox) * T), sec = ((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8;
+    if (k.runSec == null) k.runSec = sec;
+    else { let d = Math.abs(ang - k.runSec * Math.PI / 4) % (2 * Math.PI); if (d > Math.PI) d = 2 * Math.PI - d; if (d > Math.PI / 8 + 0.17) k.runSec = sec; }
+    k.runDir = RUN8[k.runSec];
+  }
   const pushing = (tx || ty) && moved < Math.hypot(tx, ty) * dt * 0.1;
   if (pushing) { k.wp = null; if (!k.pushing) { k.bump = 90; k.bumpDir = k.face; } }
   k.pushing = !!pushing;
@@ -2214,6 +2241,8 @@ function updateKip(dt) {
     if (canAct()) freeMove(dt); else k.wp = null;
   }
   if (k.mt < 1 || k.running) k.walkClock = (k.walkClock || 0) + dt;
+  if (k.skid) { k.skid.t += dt; if (k.skid.t >= 300) k.skid = null; }
+  k.idleT = (k.mt < 1 || k.running || k.skid || k.act) ? 0 : (k.idleT || 0) + dt;
   if (k.act) { k.act.t += dt; if (k.act.t >= k.act.dur && !k.act.hold) k.act = null; }
   if (k.bump > 0) k.bump = Math.max(0, k.bump - dt);
   if (k.stun > 0) k.stun = Math.max(0, k.stun - dt);
@@ -2817,14 +2846,24 @@ function drawKip() {
   if (k.fall >= 0) { anim = "fall"; frame = Math.min(KIP_FRAMES.fall - 1, Math.floor(k.fall / 140)); }
   else if (stunned) { anim = "crushed"; frame = Math.min(KIP_FRAMES.crushed - 1, Math.floor((1 - k.stun / STUN_MS) * KIP_FRAMES.crushed)); }
   else if (k.act) { anim = k.act.anim; frame = Math.min(KIP_FRAMES[anim] - 1, Math.floor(k.act.t / k.act.dur * KIP_FRAMES[anim])); }
+  else if (k.skid && !k.sliding && !k.belt && art("anim_skid_" + k.skid.dir)) { anim = "skid_" + k.skid.dir; frame = Math.min(3, Math.floor(k.skid.t / 75)); }
+  else if (k.running && !k.sliding && !k.belt && art("anim_run_" + (k.runDir || dirName))) {
+    // one full stride every two tiles, driven by distance so the feet never skate
+    anim = "run_" + (k.runDir || dirName); frame = Math.floor((k.runDist || 0) * 4) % 8;
+  }
   else if (moving && !k.sliding && !k.belt) { anim = "walk_" + dirName; frame = Math.floor((k.walkClock || 0) / ((k.stepMs || STEP_MS) * 2 / KIP_FRAMES[anim])) % KIP_FRAMES[anim]; }
+  else if (!moving && !k.sliding && !k.belt) {
+    // idle: breathe facing the cubes or the camera; side-facing Kip turns to the camera after a moment
+    const id = k.face.dr < 0 ? "idle_up" : (k.face.dr > 0 || (k.idleT || 0) > 1200) ? "idle_down" : null;
+    if (id && art("anim_" + id)) { anim = id; frame = Math.floor((k.idleT || 0) / 170) % 6; }
+  }
   const strip = anim ? art("anim_" + anim) : null;
   if (strip) {
     const h = s * 1.02 * KIP_CELL.h / KIP_CELL.stand, w = h * KIP_CELL.w / KIP_CELL.h;
     const feetOff = h * (KIP_CELL.h - KIP_CELL.base) / KIP_CELL.h;
     if (k.fall >= 0) { ctx.globalAlpha = 1; foot = proj(p.r + 0.62, 0); }   // the fall frames do the falling
     ctx.translate(cx, foot + feetOff + s * 0.04);
-    if (k.running && anim && anim.startsWith("walk")) ctx.rotate(clamp((k.vx || 0) * (k.stepMs || STEP_MS), -1, 1) * 0.08);
+    if (k.running && anim && (anim.startsWith("walk") || anim.startsWith("run"))) ctx.rotate(clamp((k.vx || 0) * (k.stepMs || STEP_MS), -1, 1) * 0.04);
     if (G.mark && anim !== "fall") { ctx.shadowColor = "rgba(82, 227, 232, 0.5)"; ctx.shadowBlur = 10; }
     if (!(k.fall > 700)) ctx.drawImage(strip, frame * KIP_CELL.w, 0, KIP_CELL.w, KIP_CELL.h, -w / 2, -h, w, h);
     ctx.restore();
