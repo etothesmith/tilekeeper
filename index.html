@@ -147,7 +147,7 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
 .btn-pair .btn { font-size: 16px; min-height: 44px; }
 .btn.secondary.danger { color: #ffb3a2; border-color: #6b2a1a; font-size: 16px; min-height: 44px; }
 #ov-settings .card { gap: 12px; }
-.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 14px; background: #081414; border: 1px solid var(--panel-edge); }
+.modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; border-radius: 14px; background: #081414; border: 1px solid var(--panel-edge); }
 .mode-tab { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-family: var(--font-display); font-size: 17px; cursor: pointer; touch-action: manipulation; }
 .mode-tab[aria-selected="true"] { background: linear-gradient(#24504b, #173a37); color: var(--ink); box-shadow: inset 0 0 0 1px rgba(82, 227, 232, 0.4); }
 .mode-tab:focus-visible { outline: 3px solid var(--glyph); outline-offset: 2px; }
@@ -173,7 +173,7 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
 #cut-skip { min-height: 44px; font-size: 16px; padding: 0 18px; }
 @media (prefers-reduced-motion: reduce) { .cut-fallback { animation: none; } }
 .title-tools { display: flex; justify-content: center; gap: 8px; }
-.title-tools .btn { font-size: 16px; min-height: 44px; padding: 0 16px; }
+.title-tools .btn { font-size: 16px; min-height: 44px; padding: 0 16px; flex: 1; }
 .best { font-size: 14px; text-align: center; color: var(--muted); letter-spacing: 0.04em; }
 @media (prefers-reduced-motion: reduce) { #hint, .star { transition: none; } }
 </style>
@@ -229,6 +229,7 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
       </ul>
       <div class="modes" role="tablist" aria-label="Game mode">
         <button role="tab" class="mode-tab" id="tab-story" data-mode="story">Story</button>
+        <button role="tab" class="mode-tab" id="tab-flow" data-mode="flow">Flow</button>
         <button role="tab" class="mode-tab" id="tab-endless" data-mode="endless">Endless</button>
         <button role="tab" class="mode-tab" id="tab-daily" data-mode="daily">Daily</button>
       </div>
@@ -236,7 +237,7 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
       <div class="levels" id="level-list" role="group" aria-label="Choose a level"></div>
       <div class="best" id="best-line"></div>
       <button class="btn" id="btn-play">Play</button>
-      <div class="title-tools"><button class="btn secondary" id="btn-settings">Settings</button></div>
+      <div class="title-tools"><button class="btn secondary" id="btn-quick">∞ Quick play</button><button class="btn secondary" id="btn-settings">Settings</button></div>
     </div>
   </div>
 
@@ -1354,6 +1355,7 @@ function addSpill(n) {
 
 function collapseRow() {
   if (G.L <= 1) return;
+  if (LV.mode === "flow" && G.L <= 12) { addShake(6, 250); SFX.knock(); updateHUD(); return; }
   const row = G.L - 1;
   G.collapses.push({ row, t: 0 });
   G.L--;
@@ -1372,6 +1374,7 @@ function collapseRow() {
   if (G.drop && G.drop.r >= G.L) G.drop = null;
   addShake(12, 500); buzz([60, 40, 60, 40, 60]); SFX.collapse();
   const k = G.kip;
+  if (LV.mode === "flow" && k.fall < 0 && k.r >= G.L) { k.r = k.pr = G.L - 1; k.mt = 1; }
   if (k.fall < 0 && k.r >= G.L) {
     k.fall = 0; k.queue.length = 0; G.mark = G.mark2 = null;
     G.phase = "failing"; G.pt = 1300; buzz(200);
@@ -1768,10 +1771,17 @@ function waveClear() {
   }
   G.mark = G.mark2 = null; G.greens = [];
   G.stamp = { text, sub, t: 0, good: perfect };
+  if (LV.mode === "flow") {
+    LV.heat = perfect ? Math.min(22, LV.heat + 1) : Math.max(0, LV.heat - 2);
+    G.streak = perfect ? (G.streak || 0) + 1 : 0;
+    if (perfect && G.L > 24) { G.L = 24; G.rowRise = null; }
+    G.stamp = { text: perfect ? (G.streak > 1 ? `STREAK ×${G.streak}` : text) : "KEEP GOING", sub: perfect ? sub : "", t: 0, good: perfect };
+    recordFlow();
+  }
   // build the next wave while the banner is up, so the solver's work never lands mid-play
   const idx = G.waveIdx + 1;
   if (idx < LV.waves || G.boss) setTimeout(() => { if (G && G.phase === "clear" && G.waveIdx === idx - 1) G.nextDef = { idx, def: makeWave(idx) }; }, 90);
-  G.phase = "clear"; G.pt = CLEAR_MS;
+  G.phase = "clear"; G.pt = LV.mode === "flow" ? 750 : CLEAR_MS;
   updateHUD();
 }
 
@@ -1782,7 +1792,7 @@ function nextWave() {
   const def = G.nextDef && G.nextDef.idx === G.waveIdx ? G.nextDef.def : makeWave(G.waveIdx);
   G.nextDef = null;
   spawnWave(def);
-  if (LV.mode === "endless" && LV.world !== G.shownWorld) { G.shownWorld = LV.world; showHint(`Now entering <b>${WORLDS[LV.world - 1].name}</b>`, 3000); MUSIC.play(LV.world); }
+  if ((LV.mode === "endless" || LV.mode === "flow") && LV.world !== G.shownWorld) { G.shownWorld = LV.world; showHint(`Now entering <b>${WORLDS[LV.world - 1].name}</b>`, 3000); MUSIC.play(LV.world); }
 }
 
 // ---------- Boss ----------
@@ -2094,7 +2104,7 @@ function update(dt) {
       G.pt -= dt;
       if (G.pt <= 0 && G.cubes.length === 0) {
         G.kip.stun = 0;
-        if (G.waveIdx >= LV.waves - 1) waveClear(); else spawnWave(G.waveDef);
+        if (G.waveIdx >= LV.waves - 1 || LV.mode === "flow") waveClear(); else spawnWave(G.waveDef);
       }
       break;
     case "clear":
@@ -3172,7 +3182,7 @@ function setText(id, v) { if (hudCache[id] !== v) { hudCache[id] = v; $(id).text
 function updateHUD() {
   if (!G) return;
   setText("#score", G.score.toLocaleString());
-  setText("#wave", (LV.mode === "endless" ? `Wave ${G.waveIdx + 1}` : G.waveIdx >= LV.waves ? `Wave ${G.waveIdx + 1} (extra)` : `Wave ${G.waveIdx + 1}/${LV.waves}`) + (G.wave ? ` · Par ${G.wave.par}` : ""));
+  setText("#wave", (LV.mode === "flow" ? `Wave ${G.waveIdx + 1}${G.streak > 1 ? ` · 🔥${G.streak}` : ""}` : LV.mode === "endless" ? `Wave ${G.waveIdx + 1}` : G.waveIdx >= LV.waves ? `Wave ${G.waveIdx + 1} (extra)` : `Wave ${G.waveIdx + 1}/${LV.waves}`) + (G.wave ? ` · Par ${G.wave.par}` : ""));
   const mult = G.combo > 1 ? Math.min(3, 1 + 0.25 * (G.combo - 1)) : 1;
   setText("#combo", "×" + mult.toFixed(2).replace(/0$/, ""));
   $("#combo").dataset.on = String(G.combo > 1);
@@ -3257,20 +3267,23 @@ function starsLine() {
 }
 // ---------- Endless and Daily ----------
 const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const modesOpen = () => starsOf(LEVELS.find(l => l.id === "1-B")) >= 1;
+// every mode is open from the start; Story progress isn't needed
+const modesOpen = () => true;
 function modeLevel(mode) {
-  const daily = mode === "daily", seed = daily ? hash("tilekeeper-daily:" + todayKey()) : null;
-  const lv = { id: daily ? "DAILY" : "END", mode, world: 1, name: daily ? "Daily Challenge" : "Endless", width: 5, length: 20,
+  const daily = mode === "daily", flow = mode === "flow", seed = daily ? hash("tilekeeper-daily:" + todayKey()) : null;
+  const lv = { id: daily ? "DAILY" : flow ? "FLOW" : "END", mode, world: 1, name: daily ? "Daily Challenge" : flow ? "Flow" : "Endless", width: 5, length: flow ? 18 : 20, heat: 0,
     waves: daily ? 10 : Infinity, depth: [3, 3], rollMs: 1400, pool: { N: 60, A: 13, F: 18 }, forbiddenPct: [0.12, 0.2], specialsCap: 2, intro: "N",
     firstWave: null, hazards: [], events: { chance: 0.05, list: ["surge", "fog", "bonus"] }, powerups: true, tries: 14,
     stars: { twoPerfect: daily ? 6 : 99, threeBR: 650 }, seedFixed: seed, dailyWorld: daily ? 1 + (seed % 5) : 1,
-    hint: daily ? "Today's challenge: 10 waves, the same for everyone. Your first run each day counts." : "Endless: how long can you last? The floor widens and new cubes join as you go." };
+    hint: daily ? "Today's challenge: 10 waves, the same for everyone. Your first run each day counts." : flow ? "<b>Flow:</b> no game over. Waves keep coming, and they get tougher as you nail them and ease off when you miss." : "Endless: how long can you last? The floor widens and new cubes join as you go." };
+  if (flow) { lv.events = { chance: 0.04, list: ["bonus", "surge"] }; lv.tries = 10; }
   tuneMode(lv, 0);
   return lv;
 }
 // difficulty curve (d = waves survived): width 5 to 7, depth 3 to 7, faster rolls, more events, new cube types unlock
 function tuneMode(lv, i) {
-  const d = lv.mode === "daily" ? 4 + i : i;
+  // Flow follows the player's "heat" (Perfect waves raise it, misses cool it) instead of the wave count
+  const d = lv.mode === "daily" ? 4 + i : lv.mode === "flow" ? lv.heat : i;
   lv.width = Math.min(7, 5 + Math.floor(d / 8));
   const D = Math.min(7, 3 + Math.floor(d / 4)); lv.depth = [D, D];
   lv.rollMs = Math.max(750, 1400 - 25 * d);
@@ -3279,8 +3292,14 @@ function tuneMode(lv, i) {
   for (const [t, at, w] of [["E", 2, 5], ["I", 4, 5], ["$", 5, 3], ["P", 6, 5], ["U", 8, 5], ["W", 10, 5], ["G", 12, 4], ["B", 14, 3], ["R", 16, 5]]) if (d >= at) pool[t] = w;
   lv.pool = pool; lv.linkPct = d >= 18 ? 0.15 : 0;
   lv.specialsCap = Math.min(7, 2 + Math.floor(d / 4));
-  lv.world = lv.mode === "daily" ? lv.dailyWorld : 1 + Math.floor(d / 10) % 5;
+  lv.world = lv.mode === "daily" ? lv.dailyWorld : lv.mode === "flow" ? 1 + Math.floor(i / 6) % 5 : 1 + Math.floor(d / 10) % 5;
   if (G && G.rollMs !== undefined && LV === lv) G.rollMs = lv.rollMs;
+}
+function recordFlow() {
+  if (!G || LV.mode !== "flow") return;
+  const f = SAVE.flow || (SAVE.flow = { bestScore: 0, bestStreak: 0, waves: 0 });
+  f.bestScore = Math.max(f.bestScore, G.score); f.bestStreak = Math.max(f.bestStreak, G.streak || 0);
+  f.waves += 0; writeSave();
 }
 function recordDaily(score, BR) {
   if (!G.dailyScored) return;
@@ -3395,8 +3414,13 @@ function renderLevels() {
   if (!story) $("#howto").hidden = true;
   $("#best-line").hidden = !story;
   $("#btn-play").disabled = !story && !open;
-  $("#btn-play").textContent = story ? "Play" : !open ? "🔒 Beat 1-B to unlock" : titleMode === "endless" ? "Play Endless" : "Play today's challenge";
-  if (titleMode === "endless") {
+  $("#btn-play").textContent = story ? "Play" : titleMode === "flow" ? "Play Flow" : titleMode === "endless" ? "Play Endless" : "Play today's challenge";
+  if (titleMode === "flow") {
+    const f = SAVE.flow;
+    $("#title-sub").textContent = "Flow";
+    info.innerHTML = `<h3>Flow</h3><p>Just play. Waves keep rolling in with no game over: the floor can shrink but never runs out. Nail Perfect waves and they get tougher; miss and they ease off. The worlds change as you go.</p>` +
+      `<p class="mode-best">${f && f.bestScore ? `Best: ${f.bestScore.toLocaleString()} pts · longest streak ${f.bestStreak}` : "No runs yet. Tap Play Flow and see how long you keep the streak."}</p>`;
+  } else if (titleMode === "endless") {
     const e = SAVE.endless;
     $("#title-sub").textContent = "Endless";
     info.innerHTML = `<h3>Endless</h3><p>Waves keep coming until the floor gives way. The stage widens from 5 to 7 columns, the rolls speed up, and new cube types join the mix as you survive.</p>` +
@@ -3421,6 +3445,7 @@ function startLevel(i) {
   newGame();
 }
 function showTitle() {
+  recordFlow();
   G = null; paused = false;
   if (LV.mode) { for (let i = 0; i < LEVELS.length; i++) if (unlocked(i)) selected = i; LV = LEVELS[selected]; }
   MUSIC.play(0);
@@ -3433,6 +3458,7 @@ function showTitle() {
 renderLevels();
 
 $("#btn-play").addEventListener("click", () => titleMode === "story" ? startLevel(selected) : startMode(titleMode));
+$("#btn-quick").addEventListener("click", () => startMode("flow"));
 $("#btn-again").addEventListener("click", () => curMode === "story" ? startLevel(selected) : startMode(curMode));
 document.querySelectorAll(".mode-tab").forEach(b => b.addEventListener("click", () => { ensureAudio(); titleMode = b.dataset.mode; if (titleMode === "story") { LV = LEVELS[selected]; } renderLevels(); }));
 // music starts with the first touch (browsers block audio until then)
@@ -3482,7 +3508,7 @@ function showResult({ stars, BR, newBest, cleared }) {
 }
 
 // test hook for automated checks; only exists when the page URL contains "debug"
-if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
+if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, collapseRow, addSpill, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
 
 // ---------- Offline play: a service worker caches the game after the first visit (skipped where it isn't allowed) ----------
 try { if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) {}
