@@ -672,6 +672,8 @@ const art = key => IMG[key + "@" + LV.world] || IMG[key] || null;
 const $ = s => document.querySelector(s);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+// I.Q.-style tumble: a slow lean, a heavy fall onto the next face, then a small rock as it settles
+const tumble = t => t < 0.86 ? Math.pow(t / 0.86, 1.7) : 1 - 0.07 * Math.sin((t - 0.86) / 0.14 * Math.PI);
 const now = () => performance.now();
 function hash(s) { let h = 2166136261; for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; }
 function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -1409,7 +1411,7 @@ function collapseRow() {
   addShake(12, 500); buzz([60, 40, 60, 40, 60]); SFX.collapse();
   const k = G.kip;
   if (k.fall < 0 && k.r >= G.L) {
-    k.fall = 0; k.queue.length = 0; G.mark = G.mark2 = null;
+    k.fall = 0; k.queue.length = 0; k.wp = null; G.mark = G.mark2 = null;
     G.phase = "failing"; G.pt = 1300; buzz(200);
   }
   updateHUD();
@@ -1417,7 +1419,7 @@ function collapseRow() {
 
 function crush() {
   G.crushes++; G.combo = 0; G.wave.flawed = true; G.mark = G.mark2 = null; G.greens = [];
-  const k = G.kip; k.stun = STUN_MS; k.queue.length = 0;
+  const k = G.kip; k.stun = STUN_MS; k.queue.length = 0; k.wp = null;
   let n = 0;
   for (const c of G.cubes) {
     if (c.state === "idle" || c.state === "rise") { c.slideFrom = curRow(c); c.state = "fall"; c.st = 0; c.slide = true; n++; if (c.type === "C") bossHeal(c); }
@@ -1436,7 +1438,7 @@ function ventTick() {
     if (age <= 0 || age % 4 !== 0) continue;
     addFx("steam", v.c, v.r, 900); SFX.wind(); addShake(3, 150);
     const k = G.kip;
-    if (k.c === v.c && k.r === v.r && k.mt >= 1) { k.daze = rollInterval(); k.queue.length = 0; buzz(60); addFx("text", v.c, v.r, 800, { text: "DAZED", color: "#ffe28a" }); }
+    if (k.c === v.c && k.r === v.r && k.mt >= 1) { k.daze = rollInterval(); k.queue.length = 0; k.wp = null; buzz(60); addFx("text", v.c, v.r, 800, { text: "DAZED", color: "#ffe28a" }); }
     if (G.cubes.some(q => q.state === "idle" && q.c === v.c && q.r === v.r)) { out.add(v.c + "," + v.r); addFx("text", v.c, v.r, 800, { text: "HELD", color: "#ffe28a" }); }
   }
   return out;
@@ -1775,10 +1777,9 @@ function walkTo(tc, tr) {
   }
   if (!prev.has(key(tc, tr))) { addFx("ghost", tc, tr, 300); SFX.tick(); return; }
   const path = [];
-  for (let cur = prev.get(key(tc, tr)); cur; cur = prev.get(key(cur[0], cur[1]))) path.unshift({ dc: cur[2], dr: cur[3] });
-  k.path = path.slice(0, 12); k.queue.length = 0;
+  for (let cur = [tc, tr]; cur && !(cur[0] === k.c && cur[1] === k.r); ) { path.unshift({ c: cur[0], r: cur[1] }); const p = prev.get(key(cur[0], cur[1])); cur = p ? [p[0], p[1]] : null; }
+  k.wp = path.slice(0, 12); k.queue.length = 0;
   addFx("ring", tc, tr, 300);
-  if (k.mt >= 1) { const st = k.path.shift(); tryStep(st.dc, st.dr); }
 }
 function detonate() {
   if (!canAct()) return;
@@ -2021,7 +2022,7 @@ function finishLevel() {
   writeSave();
   // Kip celebrates on the stage before the results card comes up
   G.phase = "victory"; G.pt = 1500; G.mark = G.mark2 = null;
-  G.kip.queue.length = 0; G.kip.act = { anim: "victory", t: 0, dur: 1100, hold: true };
+  G.kip.queue.length = 0; G.kip.wp = null; G.kip.act = { anim: "victory", t: 0, dur: 1100, hold: true };
   G.pendingResult = { stars, BR, newBest, cleared: true };
   if (LV.mode === "daily") recordDaily(G.score, BR);
   MUSIC.stop();
@@ -2050,33 +2051,103 @@ function showFail() {
 // ---------- Kip movement ----------
 // Kip glides between tiles: a step eases in only when he starts from a standstill and eases out only when he'll stop;
 // while more steps are lined up (held joystick, a tap-to-walk path, quick swipes) the motion stays at an even speed.
-const pendingMoves = k => k.queue.length > 0 || !!(k.path && k.path.length) || !!(typeof joyPtr !== "undefined" && joyPtr && joyPtr.dir);
+const pendingMoves = k => !!(k.wp && k.wp.length) || !!inputDir();
 function stepCurve(t, s0, s1) { const t2 = t * t, t3 = t2 * t; return (-2 * t3 + 3 * t2) + s0 * (t3 - 2 * t2 + t) + s1 * (t3 - t2); }
-function kipPos() {
-  const k = G.kip, t = clamp(k.mt, 0, 1);
-  const e = k.sliding || k.belt ? t : stepCurve(t, k.s0 || 0, k.s1 || 0);
-  return { c: k.pc + (k.c - k.pc) * e, r: k.pr + (k.r - k.pr) * e };
+// Kip runs freely like the I.Q. runner: a float position (tile centres are whole numbers) that can stop anywhere.
+// k.c / k.r is always the tile under his feet, so marks, crushes, pickups and hazards still work tile by tile.
+// Forced moves (ice slides, belts, currents, gusts) are short tweens from wherever he stood.
+const KIP_R = 0.3;
+const keysHeld = new Set();
+function inputDir() {
+  if (typeof joyPtr !== "undefined" && joyPtr && joyPtr.vec) return joyPtr.vec;
+  let x = 0, y = 0;
+  if (keysHeld.has("ArrowLeft")) x--; if (keysHeld.has("ArrowRight")) x++;
+  if (keysHeld.has("ArrowUp")) y--; if (keysHeld.has("ArrowDown")) y++;
+  if (!x && !y) return null;
+  const l = Math.hypot(x, y); return { x: x / l, y: y / l };
 }
+function kipPos() {
+  const k = G.kip;
+  if (k.x == null) { k.x = k.c; k.y = k.r; }
+  if (k.mt < 1) {
+    if (k.fx == null) { k.fx = k.x; k.fy = k.y; }
+    const t = clamp(k.mt, 0, 1), e = k.sliding || k.belt ? t : stepCurve(t, k.s0 || 0, k.s1 || 0);
+    return { c: k.fx + (k.c - k.fx) * e, r: k.fy + (k.r - k.fy) * e };
+  }
+  return { c: k.x, r: k.y };
+}
+const freeAt = (c, r) => c >= 0 && c < G.W && r >= 0 && r < G.L && !blocked(c, r);
+// swipes: run to the next tile centre that way (up to 3 lined up)
 function queueStep(dc, dr) {
   if (!canAct()) return;
   const k = G.kip;
-  k.path = null;                                // manual moves cancel a tap-to-walk
-  if (k.sliding) return;                       // no steering on ice
-  if (k.mt < 1) { if (k.queue.length < 2) k.queue.push({ dc, dr }); }
-  else tryStep(dc, dr);
+  if (k.sliding || k.mt < 1) return;           // no steering on ice or mid-shove
+  if (k.wp && k.wp.length >= 3) return;
+  const base = k.wp && k.wp.length ? k.wp[k.wp.length - 1] : { c: k.c, r: k.r };
+  const tc = base.c + dc, tr = base.r + dr;
+  k.face = { dc, dr };
+  if (!freeAt(tc, tr)) { if (!k.wp || !k.wp.length) { k.bump = 90; k.bumpDir = { dc, dr }; } return; }
+  k.wp = (k.wp || []).concat([{ c: tc, r: tr }]);
 }
+// a forced one-tile move (ice slide) from where Kip stands
 function tryStep(dc, dr) {
   if (!canAct()) return;
   const k = G.kip, tc = k.c + dc, tr = k.r + dr;
   k.face = { dc, dr };
-  if (tc < 0 || tc >= G.W || tr < 0 || tr >= G.L || blocked(tc, tr)) { k.bump = 90; k.bumpDir = { dc, dr }; k.queue.length = 0; return; }
+  if (!freeAt(tc, tr)) { k.bump = 90; k.bumpDir = { dc, dr }; return; }
+  kipPos();
   leftTile(k.c, k.r);
-  k.pc = k.c; k.pr = k.r; k.c = tc; k.r = tr; k.mt = 0;
-  k.s0 = k.cont ? 1 : 0; k.cont = false;
-  // holding the joystick: line up the next step now so there's no pause at the tile
-  if (typeof joyPtr !== "undefined" && joyPtr && joyPtr.dir && !k.queue.length) k.queue.push({ dc: joyPtr.dir.dc, dr: joyPtr.dir.dr });
-  k.s1 = pendingMoves(k) ? 1 : 0;
+  k.pc = k.c; k.pr = k.r; k.c = tc; k.r = tr; k.mt = 0; k.fx = null; kipPos();
+  k.s0 = 0; k.s1 = 0;
   if (k.sliding) SFX.slide(); else { SFX.step(); addFx("dust", k.pc, k.pr, 380); }
+}
+// move along one axis; cubes, holes and the stage edge stop Kip's body (radius KIP_R)
+function slideAxis(k, ax, d) {
+  if (!d) return;
+  const s = Math.sign(d), pos = ax === "x" ? k.x : k.y, other = ax === "x" ? k.y : k.x;
+  const np = pos + d, cur = Math.round(pos), lead = Math.round(np + s * KIP_R);
+  const lanes = [...new Set([Math.round(other - KIP_R * 0.8), Math.round(other + KIP_R * 0.8)])];
+  let lim = np;
+  for (let t = cur + s; s > 0 ? t <= lead : t >= lead; t += s) {
+    if (lanes.every(o => ax === "x" ? freeAt(t, o) : freeAt(o, t))) continue;
+    const edge = t - s * (0.5 + KIP_R);
+    lim = s > 0 ? Math.max(pos, Math.min(np, edge)) : Math.min(pos, Math.max(np, edge));
+    break;
+  }
+  if (ax === "x") k.x = lim; else k.y = lim;
+}
+function freeMove(dt) {
+  const k = G.kip;
+  let dir = inputDir(), left = Infinity;
+  if (dir) k.wp = null;
+  else if (k.wp && k.wp.length) {
+    let w = k.wp[0], dx = w.c - k.x, dy = w.r - k.y, d = Math.hypot(dx, dy);
+    while (d < 0.001) { k.wp.shift(); if (!k.wp.length) { k.wp = null; return; } w = k.wp[0]; dx = w.c - k.x; dy = w.r - k.y; d = Math.hypot(dx, dy); }
+    dir = { x: dx / d, y: dy / d }; left = d;
+  }
+  if (!dir) { k.pushing = false; return; }
+  k.stepMs = runStepMs();
+  const dist = Math.min(dt / k.stepMs, left), ox = k.x, oy = k.y;
+  // lane assist: running mostly along one axis drifts Kip toward the middle of his lane, so gaps are easy to thread
+  const ax = Math.abs(dir.x), ay = Math.abs(dir.y);
+  if (ax > 2 * ay) k.y += clamp(Math.round(k.y) - k.y, -dist * 0.7, dist * 0.7);
+  else if (ay > 2 * ax) k.x += clamp(Math.round(k.x) - k.x, -dist * 0.7, dist * 0.7);
+  slideAxis(k, "x", dir.x * dist); slideAxis(k, "y", dir.y * dist);
+  k.face = ax >= ay ? { dc: Math.sign(dir.x), dr: 0 } : { dc: 0, dr: Math.sign(dir.y) };
+  const moved = Math.hypot(k.x - ox, k.y - oy);
+  k.running = moved > dist * 0.15;
+  if (!k.running) {
+    k.wp = null;                               // something got in the way
+    if (!k.pushing) { k.bump = 90; k.bumpDir = k.face; }
+  }
+  k.pushing = !k.running;
+  const nc = Math.round(k.x), nr = Math.round(k.y);
+  if (nc !== k.c || nr !== k.r) {
+    leftTile(k.c, k.r);
+    k.pc = k.c; k.pr = k.r; k.c = nc; k.r = nr;
+    SFX.step(); addFx("dust", k.pc, k.pr, 380);
+    if (arrive()) k.wp = null;                 // stepped onto ice: slide
+  }
 }
 // crumble tiles give way the second time Kip steps off them
 function leftTile(c, r) {
@@ -2113,26 +2184,22 @@ function arrive() {
 }
 function updateKip(dt) {
   const k = G.kip;
+  k.running = false;
   if (k.mt < 1) {
+    kipPos();                                  // pin where this forced move started
     const stepMs = k.sliding ? 75 : k.belt ? SHIFT_MS : runStepMs();
     k.stepMs = stepMs;
     k.mt += dt / stepMs;
-    // a step that gets lined up early in the current one keeps the glide going
-    if (!k.s1 && k.mt < 0.35 && pendingMoves(k)) k.s1 = 1;
     if (k.mt >= 1) {
-      const over = (k.mt - 1) * stepMs;     // carry leftover time into the next step: no hitch at the tile
-      k.mt = 1; k.belt = false;
-      if (!arrive()) {
-        if (k.markQueued) { k.markQueued = false; actionButton(); }
-        k.cont = true;
-        if (k.queue.length) { const s = k.queue.shift(); tryStep(s.dc, s.dr); }
-        else if (k.path && k.path.length) { const s = k.path.shift(); const c0 = k.c, r0 = k.r; tryStep(s.dc, s.dr); if (k.c === c0 && k.r === r0) k.path = null; }
-        k.cont = false;
-        if (k.mt < 1 && over > 0) k.mt = Math.min(0.5, over / runStepMs());
-      }
+      k.mt = 1; k.belt = false; k.x = k.c; k.y = k.r; k.fx = null;
+      if (!arrive()) { if (k.markQueued) { k.markQueued = false; actionButton(); } }
     }
+  } else {
+    // game logic moved Kip (new wave, row collapse, width change): follow it
+    if (k.x == null || Math.round(k.x) !== k.c || Math.round(k.y) !== k.r) { k.x = k.c; k.y = k.r; }
+    if (canAct()) freeMove(dt); else k.wp = null;
   }
-  if (k.mt < 1 || k.queue.length) k.walkClock = (k.walkClock || 0) + dt;
+  if (k.mt < 1 || k.running) k.walkClock = (k.walkClock || 0) + dt;
   if (k.act) { k.act.t += dt; if (k.act.t >= k.act.dur && !k.act.hold) k.act = null; }
   if (k.bump > 0) k.bump = Math.max(0, k.bump - dt);
   if (k.stun > 0) k.stun = Math.max(0, k.stun - dt);
@@ -2547,7 +2614,7 @@ function cubeGeom(c) {
   let pivotY, th = 0;
   if (c.anim >= 1) pivotY = c.r + 1;
   else if (c.type === "I" || c.glide) pivotY = c.fromR + 1 + ease(c.anim) * (c.r - c.fromR);   // Frost (and vent-lifted cubes) glide, no tumble
-  else { pivotY = c.fromR + 1; th = ease(c.anim) * Math.PI / 2; }
+  else { pivotY = c.fromR + 1; th = tumble(c.anim) * Math.PI / 2; }
   let zOff = 0, yOff = 0, alpha = 1, clipRow = null;
   if (c.state === "rise") { const e = ease(clamp(c.st / RISE_MS, 0, 1)); zOff = -(1 - e) * 1.05; clipRow = c.r; }
   else if (c.state === "sink") { const e = clamp(c.st / SINK_MS, 0, 1); zOff = -e * e * 1.05; clipRow = curRow(c); }
@@ -2720,7 +2787,7 @@ function drawFusePips(c, x, y, w, h) {
 function drawKip() {
   const k = G.kip, p = kipPos(), s = T;
   let cx = OX + (p.c + 0.5) * T + shakeX, foot = proj(p.r + 0.62, 0);
-  const moving = k.mt < 1, lift = moving ? Math.sin(k.mt * Math.PI) * s * 0.08 : 0;
+  const moving = k.mt < 1 || k.running, lift = moving ? Math.sin(k.mt * Math.PI) * s * 0.08 : 0;
   if (k.bump > 0) { const b = Math.sin((1 - k.bump / 90) * Math.PI) * s * 0.08; cx += k.bumpDir.dc * b; foot += k.bumpDir.dr * b * 0.8; }
   ctx.save();
   let alpha = 1;
@@ -2736,7 +2803,7 @@ function drawKip() {
   if (k.fall >= 0) { anim = "fall"; frame = Math.min(KIP_FRAMES.fall - 1, Math.floor(k.fall / 140)); }
   else if (stunned) { anim = "crushed"; frame = Math.min(KIP_FRAMES.crushed - 1, Math.floor((1 - k.stun / STUN_MS) * KIP_FRAMES.crushed)); }
   else if (k.act) { anim = k.act.anim; frame = Math.min(KIP_FRAMES[anim] - 1, Math.floor(k.act.t / k.act.dur * KIP_FRAMES[anim])); }
-  else if ((moving || k.queue.length) && !k.sliding && !k.belt) { anim = "walk_" + dirName; frame = Math.floor((k.walkClock || 0) / ((k.stepMs || STEP_MS) * 2 / KIP_FRAMES[anim])) % KIP_FRAMES[anim]; }
+  else if (moving && !k.sliding && !k.belt) { anim = "walk_" + dirName; frame = Math.floor((k.walkClock || 0) / ((k.stepMs || STEP_MS) * 2 / KIP_FRAMES[anim])) % KIP_FRAMES[anim]; }
   const strip = anim ? art("anim_" + anim) : null;
   if (strip) {
     const h = s * 1.02 * KIP_CELL.h / KIP_CELL.stand, w = h * KIP_CELL.w / KIP_CELL.h;
@@ -3196,7 +3263,7 @@ function endPointer(e, cancelled) {
   if (!cancelled && ptr.mode === "pending" && ptr.moved < 10 && now() - ptr.t < 250) {
     const p = localXY(e); handleTap(p.x, p.y); lastTap = now();
   }
-  if (ptr.mode === "swipe" && G) G.kip.queue.length = 0;
+  if (ptr.mode === "swipe" && G && G.kip.wp && G.kip.wp.length > 1) G.kip.wp.length = 1;
   ptr = null;
 }
 stageEl.addEventListener("pointerup", e => endPointer(e, false));
@@ -3243,7 +3310,7 @@ window.addEventListener("keydown", e => {
   if (e.key === "p" || e.key === "P" || e.key === "Escape") { setPaused(!paused); return; }
   if (paused) return;
   const map = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
-  if (map[e.key]) { e.preventDefault(); ensureAudio(); queueStep(...map[e.key]); return; }
+  if (map[e.key]) { e.preventDefault(); ensureAudio(); keysHeld.add(e.key); if (G.kip) G.kip.wp = null; return; }
   if (e.key === "b" || e.key === "B") { ensureAudio(); blast(); return; }
   if (e.key === "q" || e.key === "Q") { ensureAudio(); usePowerup(); return; }
   if (e.key === "d" || e.key === "D") { DEBUG.on = !DEBUG.on; return; }
@@ -3253,6 +3320,9 @@ window.addEventListener("keydown", e => {
   }
   if (e.key === "Enter" && document.activeElement === document.body) { e.preventDefault(); actionButton(); }
 });
+
+window.addEventListener("keyup", e => keysHeld.delete(e.key));
+window.addEventListener("blur", () => keysHeld.clear());
 
 // ---------- UI ----------
 const hintEl = $("#hint");
@@ -3320,34 +3390,24 @@ function applyControls() {
   // the power-up slot moves beside Blast so the left thumb has the joystick
   (on ? $(".bar-right") : $(".bar-left")).prepend($("#pu-slot"));
 }
-function joyDir(dx, dy) { if (Math.hypot(dx, dy) < 14) return null; return Math.abs(dx) > Math.abs(dy) ? { dc: Math.sign(dx), dr: 0 } : { dc: 0, dr: Math.sign(dy) }; }
-function joyStep() {
-  if (!joyPtr || !joyPtr.dir) return;
-  if (G && !G.kip.queue.length) queueStep(joyPtr.dir.dc, joyPtr.dir.dr);
-}
 joy.addEventListener("pointerdown", e => {
   e.preventDefault(); e.stopPropagation(); ensureAudio();
   const r = joy.getBoundingClientRect();
-  joyPtr = { id: e.pointerId, cx: r.left + r.width / 2, cy: r.top + r.height / 2, dir: null, timer: null };
+  joyPtr = { id: e.pointerId, cx: r.left + r.width / 2, cy: r.top + r.height / 2, vec: null };
   try { joy.setPointerCapture(e.pointerId); } catch (err) {}
   joy.classList.add("active"); joyMove(e);
 });
+// analog: Kip runs the way the stick points, at full speed past a small dead zone
 function joyMove(e) {
   if (!joyPtr || e.pointerId !== joyPtr.id) return;
-  const dx = e.clientX - joyPtr.cx, dy = e.clientY - joyPtr.cy, d = Math.min(30, Math.hypot(dx, dy)), a = Math.atan2(dy, dx);
+  const dx = e.clientX - joyPtr.cx, dy = e.clientY - joyPtr.cy, h = Math.hypot(dx, dy), d = Math.min(30, h), a = Math.atan2(dy, dx);
   knob.style.transform = `translate(${Math.cos(a) * d}px, ${Math.sin(a) * d}px)`;
-  const dir = joyDir(dx, dy), changed = !joyPtr.dir !== !dir || (dir && (dir.dc !== joyPtr.dir.dc || dir.dr !== joyPtr.dir.dr));
-  joyPtr.dir = dir;
-  if (changed && dir) {
-    if (G) G.kip.queue.length = 0;
-    queueStep(dir.dc, dir.dr);
-    clearInterval(joyPtr.timer); joyPtr.timer = setInterval(joyStep, 40);
-  }
-  if (!dir) clearInterval(joyPtr.timer);
+  joyPtr.vec = h < 12 ? null : { x: dx / h, y: dy / h };
+  if (joyPtr.vec && G) G.kip.wp = null;
 }
 function joyEnd(e) {
   if (!joyPtr || e.pointerId !== joyPtr.id) return;
-  clearInterval(joyPtr.timer); joyPtr = null;
+  joyPtr = null;
   joy.classList.remove("active"); knob.style.transform = "";
 }
 joy.addEventListener("pointermove", e => { e.stopPropagation(); joyMove(e); });
