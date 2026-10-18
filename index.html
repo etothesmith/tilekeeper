@@ -229,7 +229,7 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
       </ul>
       <div class="modes" role="tablist" aria-label="Game mode">
         <button role="tab" class="mode-tab" id="tab-story" data-mode="story">Story</button>
-        <button role="tab" class="mode-tab" id="tab-flow" data-mode="flow">Flow</button>
+        <button role="tab" class="mode-tab" id="tab-quick" data-mode="quick">Quick</button>
         <button role="tab" class="mode-tab" id="tab-endless" data-mode="endless">Endless</button>
         <button role="tab" class="mode-tab" id="tab-daily" data-mode="daily">Daily</button>
       </div>
@@ -237,7 +237,7 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
       <div class="levels" id="level-list" role="group" aria-label="Choose a level"></div>
       <div class="best" id="best-line"></div>
       <button class="btn" id="btn-play">Play</button>
-      <div class="title-tools"><button class="btn secondary" id="btn-quick">∞ Quick play</button><button class="btn secondary" id="btn-settings">Settings</button></div>
+      <div class="title-tools"><button class="btn secondary" id="btn-quick">⚡ Quick play</button><button class="btn secondary" id="btn-settings">Settings</button></div>
     </div>
   </div>
 
@@ -1355,7 +1355,6 @@ function addSpill(n) {
 
 function collapseRow() {
   if (G.L <= 1) return;
-  if (LV.mode === "flow" && G.L <= 12) { addShake(6, 250); SFX.knock(); updateHUD(); return; }
   const row = G.L - 1;
   G.collapses.push({ row, t: 0 });
   G.L--;
@@ -1374,7 +1373,6 @@ function collapseRow() {
   if (G.drop && G.drop.r >= G.L) G.drop = null;
   addShake(12, 500); buzz([60, 40, 60, 40, 60]); SFX.collapse();
   const k = G.kip;
-  if (LV.mode === "flow" && k.fall < 0 && k.r >= G.L) { k.r = k.pr = G.L - 1; k.mt = 1; }
   if (k.fall < 0 && k.r >= G.L) {
     k.fall = 0; k.queue.length = 0; G.mark = G.mark2 = null;
     G.phase = "failing"; G.pt = 1300; buzz(200);
@@ -1771,17 +1769,15 @@ function waveClear() {
   }
   G.mark = G.mark2 = null; G.greens = [];
   G.stamp = { text, sub, t: 0, good: perfect };
-  if (LV.mode === "flow") {
-    LV.heat = perfect ? Math.min(22, LV.heat + 1) : Math.max(0, LV.heat - 2);
+  if (LV.mode === "quick") {
     G.streak = perfect ? (G.streak || 0) + 1 : 0;
     if (perfect && G.L > 24) { G.L = 24; G.rowRise = null; }
-    G.stamp = { text: perfect ? (G.streak > 1 ? `STREAK ×${G.streak}` : text) : "KEEP GOING", sub: perfect ? sub : "", t: 0, good: perfect };
-    recordFlow();
+    if (perfect && G.streak > 1) G.stamp.text = `STREAK ×${G.streak}`;
   }
   // build the next wave while the banner is up, so the solver's work never lands mid-play
   const idx = G.waveIdx + 1;
   if (idx < LV.waves || G.boss) setTimeout(() => { if (G && G.phase === "clear" && G.waveIdx === idx - 1) G.nextDef = { idx, def: makeWave(idx) }; }, 90);
-  G.phase = "clear"; G.pt = LV.mode === "flow" ? 750 : CLEAR_MS;
+  G.phase = "clear"; G.pt = LV.mode === "quick" ? 900 : CLEAR_MS;
   updateHUD();
 }
 
@@ -1792,7 +1788,8 @@ function nextWave() {
   const def = G.nextDef && G.nextDef.idx === G.waveIdx ? G.nextDef.def : makeWave(G.waveIdx);
   G.nextDef = null;
   spawnWave(def);
-  if ((LV.mode === "endless" || LV.mode === "flow") && LV.world !== G.shownWorld) { G.shownWorld = LV.world; showHint(`Now entering <b>${WORLDS[LV.world - 1].name}</b>`, 3000); MUSIC.play(LV.world); }
+  if (LV.mode === "quick" && LV.stageShown !== LV.stage) { LV.stageShown = LV.stage; showHint(`Stage ${LV.stage + 1}: <b>${LV.stageFrom}</b>`, 2600); if (LV.world !== G.shownWorld) { G.shownWorld = LV.world; MUSIC.play(LV.world); } }
+  else if (LV.mode === "endless" && LV.world !== G.shownWorld) { G.shownWorld = LV.world; showHint(`Now entering <b>${WORLDS[LV.world - 1].name}</b>`, 3000); MUSIC.play(LV.world); }
 }
 
 // ---------- Boss ----------
@@ -1969,6 +1966,11 @@ function finishLevel() {
 function showFail() {
   G.phase = "fail";
   MUSIC.stop();
+  if (LV.mode === "quick") {
+    const q = SAVE.quick || (SAVE.quick = { bestScore: 0, bestWaves: 0, bestStage: 0 });
+    G.newBest = G.score > q.bestScore;
+    q.bestScore = Math.max(q.bestScore, G.score); q.bestWaves = Math.max(q.bestWaves, G.waveIdx); q.bestStage = Math.max(q.bestStage, LV.stage + 1); writeSave();
+  }
   if (LV.mode === "endless") {
     const e = SAVE.endless || (SAVE.endless = { bestScore: 0, bestWaves: 0 });
     G.newBest = G.score > e.bestScore || G.waveIdx > e.bestWaves;
@@ -2104,7 +2106,7 @@ function update(dt) {
       G.pt -= dt;
       if (G.pt <= 0 && G.cubes.length === 0) {
         G.kip.stun = 0;
-        if (G.waveIdx >= LV.waves - 1 || LV.mode === "flow") waveClear(); else spawnWave(G.waveDef);
+        if (G.waveIdx >= LV.waves - 1) waveClear(); else spawnWave(G.waveDef);
       }
       break;
     case "clear":
@@ -3182,7 +3184,7 @@ function setText(id, v) { if (hudCache[id] !== v) { hudCache[id] = v; $(id).text
 function updateHUD() {
   if (!G) return;
   setText("#score", G.score.toLocaleString());
-  setText("#wave", (LV.mode === "flow" ? `Wave ${G.waveIdx + 1}${G.streak > 1 ? ` · 🔥${G.streak}` : ""}` : LV.mode === "endless" ? `Wave ${G.waveIdx + 1}` : G.waveIdx >= LV.waves ? `Wave ${G.waveIdx + 1} (extra)` : `Wave ${G.waveIdx + 1}/${LV.waves}`) + (G.wave ? ` · Par ${G.wave.par}` : ""));
+  setText("#wave", (LV.mode === "quick" ? `Stage ${LV.stage + 1} · Wave ${G.waveIdx + 1}${G.streak > 1 ? ` · 🔥${G.streak}` : ""}` : LV.mode === "endless" ? `Wave ${G.waveIdx + 1}` : G.waveIdx >= LV.waves ? `Wave ${G.waveIdx + 1} (extra)` : `Wave ${G.waveIdx + 1}/${LV.waves}`) + (G.wave ? ` · Par ${G.wave.par}` : ""));
   const mult = G.combo > 1 ? Math.min(3, 1 + 0.25 * (G.combo - 1)) : 1;
   setText("#combo", "×" + mult.toFixed(2).replace(/0$/, ""));
   $("#combo").dataset.on = String(G.combo > 1);
@@ -3270,20 +3272,44 @@ const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${Stri
 // every mode is open from the start; Story progress isn't needed
 const modesOpen = () => true;
 function modeLevel(mode) {
-  const daily = mode === "daily", flow = mode === "flow", seed = daily ? hash("tilekeeper-daily:" + todayKey()) : null;
-  const lv = { id: daily ? "DAILY" : flow ? "FLOW" : "END", mode, world: 1, name: daily ? "Daily Challenge" : flow ? "Flow" : "Endless", width: 5, length: flow ? 18 : 20, heat: 0,
+  const daily = mode === "daily", quick = mode === "quick", seed = daily ? hash("tilekeeper-daily:" + todayKey()) : null;
+  const lv = { id: daily ? "DAILY" : quick ? "QUICK" : "END", mode, world: 1, name: daily ? "Daily Challenge" : quick ? "Quick Play" : "Endless", width: 5, length: quick ? 18 : 20, stage: -1, runSeed: (Math.random() * 4294967296) >>> 0,
     waves: daily ? 10 : Infinity, depth: [3, 3], rollMs: 1400, pool: { N: 60, A: 13, F: 18 }, forbiddenPct: [0.12, 0.2], specialsCap: 2, intro: "N",
     firstWave: null, hazards: [], events: { chance: 0.05, list: ["surge", "fog", "bonus"] }, powerups: true, tries: 14,
     stars: { twoPerfect: daily ? 6 : 99, threeBR: 650 }, seedFixed: seed, dailyWorld: daily ? 1 + (seed % 5) : 1,
-    hint: daily ? "Today's challenge: 10 waves, the same for everyone. Your first run each day counts." : flow ? "<b>Flow:</b> no game over. Waves keep coming, and they get tougher as you nail them and ease off when you miss." : "Endless: how long can you last? The floor widens and new cubes join as you go." };
-  if (flow) { lv.events = { chance: 0.04, list: ["bonus", "surge"] }; lv.tries = 10; }
+    hint: daily ? "Today's challenge: 10 waves, the same for everyone. Your first run each day counts." : quick ? "<b>Quick Play:</b> 3 waves at a time from levels you've unlocked, a little faster each stage. Lose the floor and the run is over." : "Endless: how long can you last? The floor widens and new cubes join as you go." };
+  if (quick) lv.tries = 12;
   tuneMode(lv, 0);
   return lv;
 }
 // difficulty curve (d = waves survived): width 5 to 7, depth 3 to 7, faster rolls, more events, new cube types unlock
+// Quick Play: the Story levels you can play right now (no bosses) are its stage pool
+const quickPool = () => LEVELS.filter((l, i) => !l.boss && unlocked(i));
+function quickStage(lv, stage) {
+  const pool = quickPool(), rand = mulberry32(lv.runSeed + stage * 7919);
+  let src = pool[Math.floor(rand() * pool.length)];
+  if (pool.length > 1 && src.id === lv.stageFrom?.split(" ")[0]) src = pool[(pool.indexOf(src) + 1) % pool.length];
+  lv.stage = stage; lv.stageFrom = `${src.id} ${src.name}`;
+  // take the level's look and rules, sped up a little each stage
+  for (const k of ["world", "width", "pool", "forbiddenPct", "specialsCap", "linkPct", "darkness", "powerups", "intro"]) lv[k] = src[k];
+  lv.events = src.events ? { chance: src.events.chance, list: src.events.list.slice() } : { chance: 0, list: [] };
+  const extra = Math.floor(stage / 3);
+  lv.depth = [Math.min(7, src.depth[1] + extra), Math.min(7, src.depth[1] + extra)];
+  lv.rollMs = Math.round(Math.max(800, src.rollMs * Math.pow(0.95, stage)));
+  lv.hazards = src.hazards || [];
+  if (G && LV === lv) {
+    G.rollMs = lv.rollMs;
+    // lay this stage's floor tiles (glyphs, ice, belts, currents, crumble, vents) on the current floor
+    const hz = placeHazards(Object.assign({}, lv, { length: G.L }), lv.runSeed + stage, G.kip.c, G.kip.r, mulberry32);
+    G.glyphs = hz.glyphs; G.ice = hz.ice; G.conv = hz.conv; G.cur = hz.cur;
+    G.crumble = hz.crumble.map(t => ({ c: t.c, r: t.r, steps: 0 })); G.ventBase = hz.vents;
+    G.vents = hz.vents.map(v => ({ c: v.c, r: v.r, born: G.rollCount, fixed: true }));
+    $("#pu-slot").hidden = !lv.powerups;
+  }
+}
 function tuneMode(lv, i) {
-  // Flow follows the player's "heat" (Perfect waves raise it, misses cool it) instead of the wave count
-  const d = lv.mode === "daily" ? 4 + i : lv.mode === "flow" ? lv.heat : i;
+  if (lv.mode === "quick") { const st = Math.floor(i / 3); if (st !== lv.stage) quickStage(lv, st); return; }
+  const d = lv.mode === "daily" ? 4 + i : i;
   lv.width = Math.min(7, 5 + Math.floor(d / 8));
   const D = Math.min(7, 3 + Math.floor(d / 4)); lv.depth = [D, D];
   lv.rollMs = Math.max(750, 1400 - 25 * d);
@@ -3292,14 +3318,8 @@ function tuneMode(lv, i) {
   for (const [t, at, w] of [["E", 2, 5], ["I", 4, 5], ["$", 5, 3], ["P", 6, 5], ["U", 8, 5], ["W", 10, 5], ["G", 12, 4], ["B", 14, 3], ["R", 16, 5]]) if (d >= at) pool[t] = w;
   lv.pool = pool; lv.linkPct = d >= 18 ? 0.15 : 0;
   lv.specialsCap = Math.min(7, 2 + Math.floor(d / 4));
-  lv.world = lv.mode === "daily" ? lv.dailyWorld : lv.mode === "flow" ? 1 + Math.floor(i / 6) % 5 : 1 + Math.floor(d / 10) % 5;
+  lv.world = lv.mode === "daily" ? lv.dailyWorld : 1 + Math.floor(d / 10) % 5;
   if (G && G.rollMs !== undefined && LV === lv) G.rollMs = lv.rollMs;
-}
-function recordFlow() {
-  if (!G || LV.mode !== "flow") return;
-  const f = SAVE.flow || (SAVE.flow = { bestScore: 0, bestStreak: 0, waves: 0 });
-  f.bestScore = Math.max(f.bestScore, G.score); f.bestStreak = Math.max(f.bestStreak, G.streak || 0);
-  f.waves += 0; writeSave();
 }
 function recordDaily(score, BR) {
   if (!G.dailyScored) return;
@@ -3315,7 +3335,7 @@ function startMode(mode) {
   $("#btn-blast").hidden = false;
   hudCache = {};
   newGame();
-  G.shownWorld = LV.world;
+  G.shownWorld = LV.world; LV.stageShown = LV.stage;
   if (mode === "daily") { const t = SAVE.dailyTried || (SAVE.dailyTried = {}); G.dailyScored = !t[todayKey()]; t[todayKey()] = true; writeSave(); }
   MUSIC.play(LV.world);
 }
@@ -3414,12 +3434,14 @@ function renderLevels() {
   if (!story) $("#howto").hidden = true;
   $("#best-line").hidden = !story;
   $("#btn-play").disabled = !story && !open;
-  $("#btn-play").textContent = story ? "Play" : titleMode === "flow" ? "Play Flow" : titleMode === "endless" ? "Play Endless" : "Play today's challenge";
-  if (titleMode === "flow") {
-    const f = SAVE.flow;
-    $("#title-sub").textContent = "Flow";
-    info.innerHTML = `<h3>Flow</h3><p>Just play. Waves keep rolling in with no game over: the floor can shrink but never runs out. Nail Perfect waves and they get tougher; miss and they ease off. The worlds change as you go.</p>` +
-      `<p class="mode-best">${f && f.bestScore ? `Best: ${f.bestScore.toLocaleString()} pts · longest streak ${f.bestStreak}` : "No runs yet. Tap Play Flow and see how long you keep the streak."}</p>`;
+  $("#btn-quick").hidden = titleMode === "quick";
+  $("#btn-play").textContent = story ? "Play" : titleMode === "quick" ? "⚡ Quick play" : titleMode === "endless" ? "Play Endless" : "Play today's challenge";
+  if (titleMode === "quick") {
+    const q = SAVE.quick, n = quickPool().length;
+    $("#title-sub").textContent = "Quick Play";
+    info.innerHTML = `<h3>Quick Play</h3><p>Jump straight in. Each stage is 3 waves from a random level you've unlocked, a little faster every stage. Lose the floor and the run is over.</p>` +
+      `<p>${n} level${n > 1 ? "s" : ""} in the mix.${n < 20 ? " Unlock more in Story to add new worlds, cubes and floors." : ""}</p>` +
+      `<p class="mode-best">${q && q.bestScore ? `Best: ${q.bestScore.toLocaleString()} pts · reached stage ${q.bestStage}` : "No runs yet."}</p>`;
   } else if (titleMode === "endless") {
     const e = SAVE.endless;
     $("#title-sub").textContent = "Endless";
@@ -3445,7 +3467,6 @@ function startLevel(i) {
   newGame();
 }
 function showTitle() {
-  recordFlow();
   G = null; paused = false;
   if (LV.mode) { for (let i = 0; i < LEVELS.length; i++) if (unlocked(i)) selected = i; LV = LEVELS[selected]; }
   MUSIC.play(0);
@@ -3458,7 +3479,7 @@ function showTitle() {
 renderLevels();
 
 $("#btn-play").addEventListener("click", () => titleMode === "story" ? startLevel(selected) : startMode(titleMode));
-$("#btn-quick").addEventListener("click", () => startMode("flow"));
+$("#btn-quick").addEventListener("click", () => startMode("quick"));
 $("#btn-again").addEventListener("click", () => curMode === "story" ? startLevel(selected) : startMode(curMode));
 document.querySelectorAll(".mode-tab").forEach(b => b.addEventListener("click", () => { ensureAudio(); titleMode = b.dataset.mode; if (titleMode === "story") { LV = LEVELS[selected]; } renderLevels(); }));
 // music starts with the first touch (browsers block audio until then)
@@ -3468,9 +3489,9 @@ $("#btn-levels").addEventListener("click", showTitle);
 $("#btn-quit").addEventListener("click", showTitle);
 
 function showResult({ stars, BR, newBest, cleared }) {
-  $("#res-title").textContent = LV.mode === "endless" ? "Run over" : LV.mode === "daily" ? (cleared ? "Daily challenge complete" : "The floor gave way") : !cleared ? "The floor gave way" : LV.id === "5-B" ? "Gran is free!" : LV.boss ? `${LV.boss.name} defeated` : "Level clear";
+  $("#res-title").textContent = LV.mode === "endless" || LV.mode === "quick" ? "Run over" : LV.mode === "daily" ? (cleared ? "Daily challenge complete" : "The floor gave way") : !cleared ? "The floor gave way" : LV.id === "5-B" ? "Gran is free!" : LV.boss ? `${LV.boss.name} defeated` : "Level clear";
   $("#res-l-perfect").textContent = "Perfect waves";
-  $("#res-l-rows").textContent = LV.mode === "endless" ? "Waves survived" : "Rows left";
+  $("#res-l-rows").textContent = LV.mode === "endless" || LV.mode === "quick" ? "Waves survived" : "Rows left";
   const st = $("#res-stars").children;
   for (let i = 0; i < 3; i++) { st[i].classList.remove("on"); if (i < stars) setTimeout(() => { st[i].classList.add("on"); tone(660 + i * 220, 0.18, "triangle", 0.08); buzz(30); }, 450 + i * 400); }
   $("#res-stars").style.display = cleared ? "" : "none";
@@ -3482,8 +3503,8 @@ function showResult({ stars, BR, newBest, cleared }) {
     $("#res-badge").src = `assets/ui/ui_badge_tier${TIERS.length - tierIdx}.webp`;
   }
   $("#res-score").textContent = G.score.toLocaleString();
-  $("#res-perfect").textContent = `${G.perfects} / ${G.wavesPlayed || LV.waves}`;
-  $("#res-rows").textContent = LV.mode === "endless" ? String(G.waveIdx) : cleared ? `${G.L} (+${(G.L * 500).toLocaleString()})` : "0";
+  $("#res-perfect").textContent = `${G.perfects} / ${LV.waves === Infinity ? G.waveIdx + 1 : G.wavesPlayed || LV.waves}`;
+  $("#res-rows").textContent = LV.mode === "endless" || LV.mode === "quick" ? String(G.waveIdx) : cleared ? `${G.L} (+${(G.L * 500).toLocaleString()})` : "0";
   $("#res-combo").textContent = "×" + Math.min(3, 1 + 0.25 * (G.bestCombo - 1)).toFixed(2).replace(/0$/, "");
   let note;
   if (!cleared) note = "Kip was standing on the last row when it fell. Keep a row of floor behind you.";
@@ -3493,6 +3514,7 @@ function showResult({ stars, BR, newBest, cleared }) {
   else if (stars === 2) note = "Make every wave Perfect for the third star." + (LV.stars.threeCombo ? ` You'll also need a ×${LV.stars.threeCombo.toFixed(1)} combo.` : "");
   else note = `Get ${LV.stars.twoPerfect} Perfect waves for the second star: capture every cube and let none fall.`;
   if (cleared && LV.id === "5-B") note = "Aurex has fallen and the Loom is quiet. Gran is free. You beat Tilekeeper. Thanks for playing!" + (stars < 3 ? " Go back for every star." : "");
+  if (LV.mode === "quick") { const q = SAVE.quick, n = quickPool().length; note = (G.newBest ? "New best! " : "") + `You reached stage ${LV.stage + 1}. Best: ${q.bestScore.toLocaleString()} pts, stage ${q.bestStage}. ` + (n < 20 ? `Quick Play draws from ${n} unlocked level${n > 1 ? "s" : ""}; unlock more in Story to mix in new worlds and cubes.` : "Every level is in the mix."); }
   if (LV.mode === "endless") { const e = SAVE.endless; note = (G.newBest ? "New personal best! " : "") + `Best run: ${e.bestWaves} waves · ${e.bestScore.toLocaleString()} pts.`; }
   if (LV.mode === "daily") { const r = SAVE.daily && SAVE.daily[todayKey()]; note = r ? `Today's scored run: ${r.score.toLocaleString()} pts. Come back tomorrow for a new challenge.` : "Practice run."; if (G.dailyScoredRun === false) note = "Practice run. " + note; }
   const nextLv = !LV.mode && LEVELS[selected + 1];
@@ -3501,7 +3523,7 @@ function showResult({ stars, BR, newBest, cleared }) {
   const hasNext = !LV.mode && cleared && selected < LEVELS.length - 1 && unlocked(selected + 1);
   $("#btn-next").hidden = !hasNext;
   if (hasNext) $("#btn-next").textContent = `Next: ${LEVELS[selected + 1].id} ${LEVELS[selected + 1].name}`;
-  $("#btn-again").textContent = LV.mode === "endless" ? "Run again" : cleared ? "Play again" : "Try again";
+  $("#btn-again").textContent = LV.mode === "endless" || LV.mode === "quick" ? "Run again" : cleared ? "Play again" : "Try again";
   $("#btn-again").classList.toggle("secondary", hasNext);
   $("#ov-result").hidden = false;
   (hasNext ? $("#btn-next") : $("#btn-again")).focus();
