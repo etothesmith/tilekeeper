@@ -1299,6 +1299,13 @@ const markAt = (c, r) => marks().find(m => m.c === c && m.r === r);
 const iceAt = (c, r) => G.ice.some(g => g.c === c && g.r === r);
 // the roll interval right now: Slowstone doubles it
 const rollInterval = () => G.rollMs * (G.rollCount < G.mods.slowUntil ? 2 : 1) * (G.rollCount < G.mods.surgeUntil ? G.mods.surgeK : 1);
+// Kip runs at a steady, readable pace like the I.Q. runner (about 5 tiles a second on slow stages),
+// tied to the roll speed so he can always cover 6+ tiles between rolls (the solver plans for 5).
+function runStepMs() {
+  const base = G.rollMs * (G.rollCount < G.mods.surgeUntil ? G.mods.surgeK : 1);
+  const ms = clamp(base / 6.5, STEP_MS, 200);
+  return G.mods.sprintMs > 0 ? Math.round(ms * 0.5) : ms;
+}
 const sight = () => G.rollCount < G.mods.sightUntil;
 // how far Kip's lantern reaches in the dark worlds (Blackout shrinks it)
 const lantern = () => !LV.darkness ? 99 : G.rollCount < G.mods.blackoutUntil ? 2 : 4;
@@ -2107,7 +2114,8 @@ function arrive() {
 function updateKip(dt) {
   const k = G.kip;
   if (k.mt < 1) {
-    const stepMs = k.sliding ? 75 : k.belt ? SHIFT_MS : G.mods.sprintMs > 0 ? 60 : STEP_MS;
+    const stepMs = k.sliding ? 75 : k.belt ? SHIFT_MS : runStepMs();
+    k.stepMs = stepMs;
     k.mt += dt / stepMs;
     // a step that gets lined up early in the current one keeps the glide going
     if (!k.s1 && k.mt < 0.35 && pendingMoves(k)) k.s1 = 1;
@@ -2120,7 +2128,7 @@ function updateKip(dt) {
         if (k.queue.length) { const s = k.queue.shift(); tryStep(s.dc, s.dr); }
         else if (k.path && k.path.length) { const s = k.path.shift(); const c0 = k.c, r0 = k.r; tryStep(s.dc, s.dr); if (k.c === c0 && k.r === r0) k.path = null; }
         k.cont = false;
-        if (k.mt < 1 && over > 0) k.mt = Math.min(0.5, over / (G.mods.sprintMs > 0 ? 60 : STEP_MS));
+        if (k.mt < 1 && over > 0) k.mt = Math.min(0.5, over / runStepMs());
       }
     }
   }
@@ -2229,7 +2237,7 @@ function updateFx(dt) {
     shakeX = (Math.random() * 2 - 1) * m; shakeY = (Math.random() * 2 - 1) * m;
   } else { shakeX = 0; shakeY = 0; }
   const target = camTarget();
-  camY += (target - camY) * Math.min(1, dt / 120);
+  camY += (target - camY) * Math.min(1, dt / 260);   // soft, trailing follow cam
 }
 
 // ---------- Rendering ----------
@@ -2728,7 +2736,7 @@ function drawKip() {
   if (k.fall >= 0) { anim = "fall"; frame = Math.min(KIP_FRAMES.fall - 1, Math.floor(k.fall / 140)); }
   else if (stunned) { anim = "crushed"; frame = Math.min(KIP_FRAMES.crushed - 1, Math.floor((1 - k.stun / STUN_MS) * KIP_FRAMES.crushed)); }
   else if (k.act) { anim = k.act.anim; frame = Math.min(KIP_FRAMES[anim] - 1, Math.floor(k.act.t / k.act.dur * KIP_FRAMES[anim])); }
-  else if ((moving || k.queue.length) && !k.sliding && !k.belt) { anim = "walk_" + dirName; frame = Math.floor((k.walkClock || 0) / 70) % KIP_FRAMES[anim]; }
+  else if ((moving || k.queue.length) && !k.sliding && !k.belt) { anim = "walk_" + dirName; frame = Math.floor((k.walkClock || 0) / ((k.stepMs || STEP_MS) * 2 / KIP_FRAMES[anim])) % KIP_FRAMES[anim]; }
   const strip = anim ? art("anim_" + anim) : null;
   if (strip) {
     const h = s * 1.02 * KIP_CELL.h / KIP_CELL.stand, w = h * KIP_CELL.w / KIP_CELL.h;
