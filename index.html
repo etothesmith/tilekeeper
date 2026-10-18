@@ -228,7 +228,7 @@ body.joy-on .bar-note { display: none; }
     </div>
     <div class="card">
       <ul class="howto" id="howto">
-        <li><span class="k">↕</span><span><b>Swipe</b>, use the joystick, or <b>tap a tile</b> to move Kip there.</span></li>
+        <li><span class="k">↕</span><span><b>Press and drag</b> anywhere to run (Kip keeps running while you hold), use the joystick, or <b>tap a tile</b> to run there.</span></li>
         <li><span class="k">◎</span><span>Stand in a cube's path and press the <b>brass button</b> to mark the tile under Kip. Then <b>step off</b>.</span></li>
         <li><span class="k">✦</span><span>When a cube rolls onto your mark, press the brass button again (or tap the cube) to capture it.</span></li>
         <li><span class="k">!</span><span>Don't get rolled over, and don't let cubes fall off the edge. Too many spills and the floor crumbles.</span></li>
@@ -2058,7 +2058,9 @@ function stepCurve(t, s0, s1) { const t2 = t * t, t3 = t2 * t; return (-2 * t3 +
 // Forced moves (ice slides, belts, currents, gusts) are short tweens from wherever he stood.
 const KIP_R = 0.3;
 const keysHeld = new Set();
+let dragStick = null;   // { ox, oy, x, y, vec } in client px while a finger drags on the stage
 function inputDir() {
+  if (dragStick && dragStick.vec) return dragStick.vec;
   if (typeof joyPtr !== "undefined" && joyPtr && joyPtr.vec) return joyPtr.vec;
   let x = 0, y = 0;
   if (keysHeld.has("ArrowLeft")) x--; if (keysHeld.has("ArrowRight")) x++;
@@ -2118,35 +2120,47 @@ function slideAxis(k, ax, d) {
 }
 function freeMove(dt) {
   const k = G.kip;
-  let dir = inputDir(), left = Infinity;
-  if (dir) k.wp = null;
-  else if (k.wp && k.wp.length) {
-    let w = k.wp[0], dx = w.c - k.x, dy = w.r - k.y, d = Math.hypot(dx, dy);
-    while (d < 0.001) { k.wp.shift(); if (!k.wp.length) { k.wp = null; return; } w = k.wp[0]; dx = w.c - k.x; dy = w.r - k.y; d = Math.hypot(dx, dy); }
-    dir = { x: dx / d, y: dy / d }; left = d;
-  }
-  if (!dir) { k.pushing = false; return; }
   k.stepMs = runStepMs();
-  const dist = Math.min(dt / k.stepMs, left), ox = k.x, oy = k.y;
-  // lane assist: running mostly along one axis drifts Kip toward the middle of his lane, so gaps are easy to thread
-  const ax = Math.abs(dir.x), ay = Math.abs(dir.y);
-  if (ax > 2 * ay) k.y += clamp(Math.round(k.y) - k.y, -dist * 0.7, dist * 0.7);
-  else if (ay > 2 * ax) k.x += clamp(Math.round(k.x) - k.x, -dist * 0.7, dist * 0.7);
-  slideAxis(k, "x", dir.x * dist); slideAxis(k, "y", dir.y * dist);
-  k.face = ax >= ay ? { dc: Math.sign(dir.x), dr: 0 } : { dc: 0, dr: Math.sign(dir.y) };
-  const moved = Math.hypot(k.x - ox, k.y - oy);
-  k.running = moved > dist * 0.15;
-  if (!k.running) {
-    k.wp = null;                               // something got in the way
-    if (!k.pushing) { k.bump = 90; k.bumpDir = k.face; }
+  const vmax = 1 / k.stepMs;
+  let dir = inputDir(), tx = 0, ty = 0;
+  if (dir) { k.wp = null; const m = dir.m == null ? 1 : dir.m; tx = dir.x * vmax * m; ty = dir.y * vmax * m; }
+  else if (k.wp && k.wp.length) {
+    // round the corners of a path: once near a waypoint that isn't the last, head for the next one
+    while (k.wp.length > 1 && Math.hypot(k.wp[0].c - k.x, k.wp[0].r - k.y) < 0.45) k.wp.shift();
+    const w = k.wp[0], dx = w.c - k.x, dy = w.r - k.y, d = Math.hypot(dx, dy);
+    if (d < 0.05) { k.x = w.c; k.y = w.r; k.wp = null; k.vx = k.vy = 0; }
+    else { const sp = k.wp.length > 1 ? vmax : Math.min(vmax, d / 90); tx = dx / d * sp; ty = dy / d * sp; }
   }
-  k.pushing = !k.running;
+  // momentum: a quick push-off and a short skid to a stop, never an instant start or halt
+  const f = Math.min(1, dt / (tx || ty ? 70 : 85));
+  k.vx = (k.vx || 0) + (tx - (k.vx || 0)) * f;
+  k.vy = (k.vy || 0) + (ty - (k.vy || 0)) * f;
+  const sp = Math.hypot(k.vx, k.vy);
+  if (!tx && !ty && sp < vmax * 0.05) { k.vx = k.vy = 0; k.pushing = false; return; }
+  const ox = k.x, oy = k.y, dx = k.vx * dt, dy = k.vy * dt;
+  // light lane assist only when running nearly straight along a row or column
+  const ax = Math.abs(k.vx), ay = Math.abs(k.vy), lane = Math.hypot(dx, dy) * 0.45;
+  if (ax > 2.5 * ay) k.y += clamp(Math.round(k.y) - k.y, -lane, lane);
+  else if (ay > 2.5 * ax) k.x += clamp(Math.round(k.x) - k.x, -lane, lane);
+  slideAxis(k, "x", dx); if (Math.abs(k.x - ox) < Math.abs(dx) * 0.5) k.vx *= 0.3;
+  slideAxis(k, "y", dy); if (Math.abs(k.y - oy) < Math.abs(dy) * 0.5) k.vy *= 0.3;
+  // face where he's heading, with a little stickiness so diagonals don't flicker
+  if (sp > vmax * 0.15) {
+    const horiz = k.face.dc !== 0;
+    if (horiz ? ay > ax * 1.3 : ax > ay * 1.3) k.face = ax > ay ? { dc: Math.sign(k.vx), dr: 0 } : { dc: 0, dr: Math.sign(k.vy) };
+    else k.face = horiz ? { dc: Math.sign(k.vx) || k.face.dc, dr: 0 } : { dc: 0, dr: Math.sign(k.vy) || k.face.dr };
+  }
+  const moved = Math.hypot(k.x - ox, k.y - oy);
+  k.running = moved > vmax * dt * 0.12;
+  const pushing = (tx || ty) && moved < Math.hypot(tx, ty) * dt * 0.1;
+  if (pushing) { k.wp = null; if (!k.pushing) { k.bump = 90; k.bumpDir = k.face; } }
+  k.pushing = !!pushing;
   const nc = Math.round(k.x), nr = Math.round(k.y);
   if (nc !== k.c || nr !== k.r) {
     leftTile(k.c, k.r);
     k.pc = k.c; k.pr = k.r; k.c = nc; k.r = nr;
     SFX.step(); addFx("dust", k.pc, k.pr, 380);
-    if (arrive()) k.wp = null;                 // stepped onto ice: slide
+    if (arrive()) { k.wp = null; k.vx = k.vy = 0; }   // stepped onto ice: slide
   }
 }
 // crumble tiles give way the second time Kip steps off them
@@ -2810,6 +2824,7 @@ function drawKip() {
     const feetOff = h * (KIP_CELL.h - KIP_CELL.base) / KIP_CELL.h;
     if (k.fall >= 0) { ctx.globalAlpha = 1; foot = proj(p.r + 0.62, 0); }   // the fall frames do the falling
     ctx.translate(cx, foot + feetOff + s * 0.04);
+    if (k.running && anim && anim.startsWith("walk")) ctx.rotate(clamp((k.vx || 0) * (k.stepMs || STEP_MS), -1, 1) * 0.08);
     if (G.mark && anim !== "fall") { ctx.shadowColor = "rgba(82, 227, 232, 0.5)"; ctx.shadowBlur = 10; }
     if (!(k.fall > 700)) ctx.drawImage(strip, frame * KIP_CELL.w, 0, KIP_CELL.w, KIP_CELL.h, -w / 2, -h, w, h);
     ctx.restore();
@@ -3132,6 +3147,15 @@ function render() {
   // keep a covered mark visible on top of the cube sitting on it
   for (const m of marks()) if (G.cubes.some(q => (q.state === "idle" || q.state === "rise") && curCol(q) === m.c && curRow(q) === m.r)) drawMark(m.c, m.r, 0.5, true);
   drawFx();
+  if (dragStick) {
+    const r = cv.getBoundingClientRect(), ox = dragStick.ox - r.left, oy = dragStick.oy - r.top;
+    const kx = dragStick.x - r.left, ky = dragStick.y - r.top;
+    ctx.save(); ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = "rgba(82, 227, 232, 0.9)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(ox, oy, 34, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "rgba(82, 227, 232, 0.55)"; ctx.beginPath(); ctx.arc(kx, ky, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
   const near = art("bg_near");
   if (near) {
     // foreground vines frame the stage but never cover a tile
@@ -3242,19 +3266,15 @@ stageEl.addEventListener("pointerdown", e => {
 });
 stageEl.addEventListener("pointermove", e => {
   if (!ptr || e.pointerId !== ptr.id) return;
-  const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y, adx = Math.abs(dx), ady = Math.abs(dy);
+  const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
   ptr.moved = Math.max(ptr.moved, Math.hypot(dx, dy));
-  if (ptr.mode === "pending") {
-    const dom = Math.max(adx, ady), other = Math.min(adx, ady);
-    if (dom >= swipeMin() && dom >= 1.5 * other && now() - lastTap > 80 && now() - ptr.t <= 450) {
-      ptr.mode = "swipe";
-      ptr.dir = adx > ady ? { dc: Math.sign(dx), dr: 0 } : { dc: 0, dr: Math.sign(dy) };
-      ptr.ax = e.clientX; ptr.ay = e.clientY;
-      queueStep(ptr.dir.dc, ptr.dir.dr);
-    }
-  } else if (ptr.mode === "swipe") {
-    const along = ptr.dir.dc ? (e.clientX - ptr.ax) * ptr.dir.dc : (e.clientY - ptr.ay) * ptr.dir.dr;
-    if (along >= 40) { ptr.ax = e.clientX; ptr.ay = e.clientY; queueStep(ptr.dir.dc, ptr.dir.dr); }
+  // press and drag anywhere: Kip runs that way for as long as the finger stays down (a floating stick)
+  if (ptr.mode === "pending" && ptr.moved >= 12 && G && canAct()) { ptr.mode = "drag"; dragStick = { ox: ptr.x, oy: ptr.y, x: e.clientX, y: e.clientY, vec: null }; G.kip.wp = null; }
+  if (ptr.mode === "drag" && dragStick) {
+    let ddx = e.clientX - dragStick.ox, ddy = e.clientY - dragStick.oy, h = Math.hypot(ddx, ddy);
+    if (h > 56) { dragStick.ox = e.clientX - ddx / h * 56; dragStick.oy = e.clientY - ddy / h * 56; ddx = ddx / h * 56; ddy = ddy / h * 56; h = 56; }
+    dragStick.x = e.clientX; dragStick.y = e.clientY;
+    dragStick.vec = h < 8 ? null : { x: ddx / h, y: ddy / h, m: clamp((h - 6) / 26, 0.4, 1) };
   }
 });
 function endPointer(e, cancelled) {
@@ -3263,7 +3283,15 @@ function endPointer(e, cancelled) {
   if (!cancelled && ptr.mode === "pending" && ptr.moved < 10 && now() - ptr.t < 250) {
     const p = localXY(e); handleTap(p.x, p.y); lastTap = now();
   }
-  if (ptr.mode === "swipe" && G && G.kip.wp && G.kip.wp.length > 1) G.kip.wp.length = 1;
+  if (ptr.mode === "drag") {
+    // a quick flick still nudges Kip one tile that way
+    const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
+    if (!cancelled && G && now() - ptr.t < 200 && Math.hypot(dx, dy) >= swipeMin()) {
+      G.kip.vx = G.kip.vy = 0;
+      if (Math.abs(dx) > Math.abs(dy)) queueStep(Math.sign(dx), 0); else queueStep(0, Math.sign(dy));
+    }
+    dragStick = null;
+  }
   ptr = null;
 }
 stageEl.addEventListener("pointerup", e => endPointer(e, false));
@@ -3402,7 +3430,7 @@ function joyMove(e) {
   if (!joyPtr || e.pointerId !== joyPtr.id) return;
   const dx = e.clientX - joyPtr.cx, dy = e.clientY - joyPtr.cy, h = Math.hypot(dx, dy), d = Math.min(30, h), a = Math.atan2(dy, dx);
   knob.style.transform = `translate(${Math.cos(a) * d}px, ${Math.sin(a) * d}px)`;
-  joyPtr.vec = h < 12 ? null : { x: dx / h, y: dy / h };
+  joyPtr.vec = h < 10 ? null : { x: dx / h, y: dy / h, m: clamp((h - 6) / 22, 0.4, 1) };
   if (joyPtr.vec && G) G.kip.wp = null;
 }
 function joyEnd(e) {
@@ -3719,7 +3747,7 @@ function showResult({ stars, BR, newBest, cleared }) {
 }
 
 // test hook for automated checks; only exists when the page URL contains "debug"
-if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, collapseRow, addSpill, actionButton, walkTo, kipPos, applyControls, forceMark: (c, r) => { G.mark = { c, r, placed: 0, under: null }; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
+if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, get drag() { return dragStick; }, inputDir, get joy() { return joyPtr; }, keysHeld, get ptr() { return ptr; }, collapseRow, addSpill, actionButton, walkTo, kipPos, applyControls, forceMark: (c, r) => { G.mark = { c, r, placed: 0, under: null }; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
 
 // ---------- Offline play: a service worker caches the game after the first visit (skipped where it isn't allowed) ----------
 try { if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) {}
