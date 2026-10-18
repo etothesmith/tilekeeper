@@ -50,6 +50,8 @@ function conveyorStep(cubes, conv, W, kip) {
 }
 // Fuse dials: once a Fuse cube reaches the near half of the floor it lights at 3, then counts down 1 per roll; at 0 it turns black.
 const fuseHotRow = L => Math.ceil(L / 2);
+// how many tiles the bot lets Kip move per roll (a player managing ~4 swipes a roll)
+const MOVES = 5;
 function solveWave(grid, W, L, kipC, kipR, margin = 2, hz = {}) {
   const conv = hz.conv || [], cur = hz.cur || [];
   const cracks = new Set(), holes = new Set();
@@ -77,7 +79,11 @@ function solveWave(grid, W, L, kipC, kipR, margin = 2, hz = {}) {
   const hot = fuseHotRow(L);
   for (let step = 0; step < 400; step++) {
     // 1) trigger last roll's mark
-    if (mark) { const q = at(mark.c, mark.r); if (q && q.t !== "F" && !phased(q)) take(q); mark = null; }
+    if (mark) {
+      const q = at(mark.c, mark.r);
+      if (q && q === mark.want && !phased(q)) { take(q); mark = null; }
+      else if (!cubes.includes(mark.want) || roll >= mark.due) mark = null;   // its cube is gone, or it didn't come
+    }
     // 2) blast
     if (greens.length) {
       const hit = new Set(); let bad = false;
@@ -104,23 +110,37 @@ function solveWave(grid, W, L, kipC, kipR, margin = 2, hz = {}) {
     for (const q of cubes) { const p = plan.get(q); danger.add(p.c + "," + p.r); if (p.pass) danger.add(p.pass.c + "," + p.pass.r); const f = fin.get(q); danger.add(f.c + "," + f.r); }
     const safe = (c, r) => inStage(c, r) && !at(c, r) && !danger.has(c + "," + r) && !holes.has(c + "," + r) && !crumble.has(c + "," + r) && !vents.has(c + "," + r);
     const urgency = q => fin.get(q).r + (q.t === "U" ? (q.lit ? 10 : 4) : 0) + (q.t === "B" ? 6 : 0) + (q.t === "A" && W >= 7 ? 3 : 0);
-    const targets = cubes.filter(q => req(q) && !phased(q, roll + 1)).sort((a, b) => urgency(b) - urgency(a) || Math.abs(a.c - kip.c) - Math.abs(b.c - kip.c));
+    const targets = cubes.filter(req).sort((a, b) => urgency(b) - urgency(a) || Math.abs(a.c - kip.c) - Math.abs(b.c - kip.c));
+    // where each cube will be over the next few rolls (ignoring captures)
+    const ahead = new Map(cubes.map(q => [q, []]));
+    { let sim = cubes.map(q => ({ c: q.c, r: q.r, t: q.t, dir: q.dir, src: q }));
+      for (let k = 1; k <= 3; k++) { const pl = rollPlan(sim, W); for (const g of sim) { const p = pl.get(g); g.c = p.c; g.r = p.r; g.dir = p.dir; } conveyorStep(sim, conv, W, null); for (const g of sim) ahead.get(g.src).push({ c: g.c, r: g.r }); } }
     let chosen = null;
-    for (const q of targets) {
-      const tile = { c: fin.get(q).c, r: fin.get(q).r };
-      // a mark may sit under a cube that's rolling away; it only catches the next cube to arrive
-      if (!inStage(tile.c, tile.r) || greens.some(g => g.c === tile.c && g.r === tile.r)) continue;
+    for (const q of (mark ? [] : targets)) {
+      // Kip marks only the tile he stands on: he walks onto a tile the cube will land on 1-3 rolls from now (it must be
+      // free right now), marks it, and steps off to a safe neighbour before the roll. Walking + stepping off fits in MOVES.
+      // Any cubes that roll over the mark first are let through; he detonates when this cube arrives.
+      let tile = null, due = 0;
+      for (let k = 1; k <= 3 && !tile; k++) {
+        const t = ahead.get(q)[k - 1];
+        if (!inStage(t.c, t.r) || t.r >= L - margin) break;
+        if (phased(q, roll + k) || greens.some(g => g.c === t.c && g.r === t.r) || at(t.c, t.r) || holes.has(t.c + "," + t.r)) continue;
+        if (Math.abs(t.c - kip.c) + Math.abs(t.r - kip.r) + 1 > MOVES) continue;
+        tile = t; due = roll + k;
+      }
+      if (!tile) continue;
+      const toTile = Math.abs(tile.c - kip.c) + Math.abs(tile.r - kip.r);
+      if (toTile + 1 > MOVES) continue;
       let best = null;
-      for (let r = tile.r - 2; r <= tile.r + 2; r++) for (let c = tile.c - 2; c <= tile.c + 2; c++) {
-        if (!safe(c, r) || (c === tile.c && r === tile.r)) continue;
-        const dist = Math.abs(c - kip.c) + Math.abs(r - kip.r);
-        if (dist > 3) continue;
-        const score = r * 10 - dist - ([...conv, ...cur].some(t => t.c === c && t.r === r) ? 5 : 0);   // prefer standing behind the wave, off belts and currents
+      for (const [dc, dr] of [[0, 1], [-1, 0], [1, 0], [0, -1]]) {
+        const c = tile.c + dc, r = tile.r + dr;
+        if (!safe(c, r)) continue;
+        const score = r * 10 - ([...conv, ...cur].some(t => t.c === c && t.r === r) ? 5 : 0);   // prefer stepping back toward the edge, off belts and currents
         if (!best || score > best.score) best = { c, r, score };
       }
-      if (best) { chosen = { tile, spot: best }; break; }
+      if (best) { chosen = { tile, spot: best, want: q, due }; break; }
     }
-    if (chosen) { mark = chosen.tile; kip = { c: chosen.spot.c, r: chosen.spot.r }; }
+    if (chosen) { mark = { c: chosen.tile.c, r: chosen.tile.r, want: chosen.want, due: chosen.due }; kip = { c: chosen.spot.c, r: chosen.spot.r }; }
     // light an Ember in reach when, after this roll, it will blow up 2+ cubes and no black one
     if (chosen) for (const e of cubes) {
       if (e.t !== "E" || e.lit || Math.max(Math.abs(e.c - kip.c), Math.abs(e.r - kip.r)) > 2) continue;
@@ -132,8 +152,8 @@ function solveWave(grid, W, L, kipC, kipR, margin = 2, hz = {}) {
       // nothing markable in reach yet: walk toward the most urgent cube (or just out of the way)
       const goal = targets.length ? { c: fin.get(targets[0]).c, r: fin.get(targets[0]).r + 2 } : { c: kip.c, r: kip.r };
       let best = null;
-      for (let r = kip.r - 3; r <= kip.r + 3; r++) for (let c = kip.c - 3; c <= kip.c + 3; c++) {
-        if (!safe(c, r) || Math.abs(c - kip.c) + Math.abs(r - kip.r) > 3) continue;
+      for (let r = kip.r - MOVES; r <= kip.r + MOVES; r++) for (let c = kip.c - MOVES; c <= kip.c + MOVES; c++) {
+        if (!safe(c, r) || Math.abs(c - kip.c) + Math.abs(r - kip.r) > MOVES) continue;
         const score = -(Math.abs(c - goal.c) + Math.abs(r - goal.r));
         if (!best || score > best.score) best = { c, r, score };
       }

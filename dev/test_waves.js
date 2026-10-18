@@ -8,7 +8,7 @@ const mul = a => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a
 const env = new Function('mulberry32', src + '\n' + lvSrc + '\nreturn { solveWave, buildWave, LEVELS, placeHazards };')(mul);
 const { solveWave, buildWave, LEVELS, placeHazards } = env;
 let ok = true;
-for (const lv of LEVELS) {
+for (const lv of LEVELS.filter(l => !process.argv[2] || process.argv.slice(2).some(p => l.id.startsWith(p)))) {
   const kc = Math.floor(lv.width / 2), kr = lv.length - 3;
   const conv = placeHazards(lv, 12345, kc, kr, mul);
   const a = solveWave(lv.firstWave.map(r => r.slice()), lv.width, lv.length, kc, kr, lv.width >= 7 ? 1 : 2, conv);
