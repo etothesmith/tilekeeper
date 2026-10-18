@@ -1772,6 +1772,7 @@ function actionButton() {
   const k = G.kip;
   if (marks().some(m => occupant(m.c, m.r))) { detonate(); return; }
   if (k.mt < 1 || k.sliding) { k.markQueued = true; return; }     // mark as soon as this step lands
+  if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; }   // pressing the button plants his feet
   if (markAt(k.c, k.r)) { SFX.tick(); return; }
   placeMark(k.c, k.r);
 }
@@ -2124,8 +2125,17 @@ function slideAxis(k, ax, d) {
   const np = pos + d, cur = Math.round(pos), lead = Math.round(np + s * KIP_R);
   const lanes = [...new Set([Math.round(other - KIP_R * 0.8), Math.round(other + KIP_R * 0.8)])];
   let lim = np;
+  const own = Math.round(other), open = o => ax === "x" ? freeAt(t0, o) : freeAt(o, t0);
+  let t0;
   for (let t = cur + s; s > 0 ? t <= lead : t >= lead; t += s) {
-    if (lanes.every(o => ax === "x" ? freeAt(t, o) : freeAt(o, t))) continue;
+    t0 = t;
+    if (lanes.every(open)) continue;
+    // only brushing a corner of the next lane over: slip sideways into his own lane instead of snagging
+    if (open(own)) {
+      const nudge = clamp(own - other, -Math.abs(d) * 1.2, Math.abs(d) * 1.2);
+      if (ax === "x") k.y += nudge; else k.x += nudge;
+      continue;
+    }
     const edge = t - s * (0.5 + KIP_R);
     lim = s > 0 ? Math.max(pos, Math.min(np, edge)) : Math.min(pos, Math.max(np, edge));
     break;
@@ -2147,7 +2157,7 @@ function freeMove(dt) {
     else { const sp = k.wp.length > 1 ? vmax : Math.min(vmax, d / 90); tx = dx / d * sp; ty = dy / d * sp; }
   }
   // momentum: a quick push-off and a short skid to a stop, never an instant start or halt
-  const f = Math.min(1, dt / (tx || ty ? 70 : 85));
+  const f = Math.min(1, dt / (tx || ty ? 70 : 40));
   k.vx = (k.vx || 0) + (tx - (k.vx || 0)) * f;
   k.vy = (k.vy || 0) + (ty - (k.vy || 0)) * f;
   const sp = Math.hypot(k.vx, k.vy);
@@ -2155,7 +2165,13 @@ function freeMove(dt) {
   if (tx || ty) k.skid = null;
   else if (k.hadInput && sp > vmax * 0.55 && !k.skid) k.skid = { t: 0, dir: k.face.dr < 0 ? "up" : k.face.dr > 0 ? "down" : k.face.dc < 0 ? "left" : "right" };
   k.hadInput = !!(dir && (tx || ty));
-  if (!tx && !ty && sp < vmax * 0.05) { k.vx = k.vy = 0; k.pushing = false; return; }
+  if (!tx && !ty && sp < vmax * 0.3) {
+    // coming to rest: ease onto the middle of the square under his feet, so the mark always lands where he looks
+    k.vx = k.vy = 0; k.pushing = false;
+    const e = Math.min(1, dt / 90), gx = k.c - k.x, gy = k.r - k.y;
+    if (Math.abs(gx) > 0.002 || Math.abs(gy) > 0.002) { k.x += gx * e; k.y += gy * e; } else { k.x = k.c; k.y = k.r; }
+    return;
+  }
   const ox = k.x, oy = k.y, dx = k.vx * dt, dy = k.vy * dt;
   // light lane assist only when running nearly straight along a row or column
   const ax = Math.abs(k.vx), ay = Math.abs(k.vy), lane = Math.hypot(dx, dy) * 0.45;
@@ -3325,7 +3341,7 @@ function endPointer(e, cancelled) {
   if (ptr.mode === "drag") {
     // a quick flick still nudges Kip one tile that way
     const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
-    if (!cancelled && G && now() - ptr.t < 200 && Math.hypot(dx, dy) >= swipeMin()) {
+    if (!cancelled && G && now() - ptr.t < 160 && Math.hypot(dx, dy) >= swipeMin() * 1.5) {
       G.kip.vx = G.kip.vy = 0;
       if (Math.abs(dx) > Math.abs(dy)) queueStep(Math.sign(dx), 0); else queueStep(0, Math.sign(dy));
     }
