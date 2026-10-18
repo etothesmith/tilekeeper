@@ -112,6 +112,8 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
 .howto b { color: var(--ink); }
 .btn { min-height: 52px; border-radius: 14px; border: 0; font-family: var(--font-display); font-size: 22px; letter-spacing: 0.03em; cursor: pointer; touch-action: manipulation; color: #1b1206; background: linear-gradient(#f5cf7c, #d39a3c); box-shadow: 0 4px 0 #7a5418; }
 .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #7a5418; }
+.btn:disabled { background: #2a3533; color: #8fa39c; box-shadow: 0 4px 0 #1a2220; cursor: not-allowed; }
+.btn:disabled:active { transform: none; }
 .btn.secondary { background: #0e1f20; color: var(--ink); border: 1px solid var(--panel-edge); box-shadow: none; font-size: 18px; }
 .btn-row { display: grid; gap: 10px; }
 .stars { display: flex; justify-content: center; gap: 4px; line-height: 1; }
@@ -3393,7 +3395,7 @@ function renderLevels() {
   if (!story) $("#howto").hidden = true;
   $("#best-line").hidden = !story;
   $("#btn-play").disabled = !story && !open;
-  $("#btn-play").textContent = story ? "Play" : titleMode === "endless" ? "Play Endless" : "Play today's challenge";
+  $("#btn-play").textContent = story ? "Play" : !open ? "🔒 Beat 1-B to unlock" : titleMode === "endless" ? "Play Endless" : "Play today's challenge";
   if (titleMode === "endless") {
     const e = SAVE.endless;
     $("#title-sub").textContent = "Endless";
