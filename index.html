@@ -72,6 +72,8 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
 #btn-detonate:active { transform: translateY(3px); background-image: url("assets/ui/ui_btn_detonate_pressed.webp"), radial-gradient(circle at 50% 40%, #f2c46b, #b07a2c 62%, transparent 64%); }
 #btn-detonate.armed { filter: drop-shadow(0 4px 3px rgba(0,0,0,0.5)) drop-shadow(0 0 12px rgba(82, 227, 232, 0.75)); }
 #btn-detonate .ring { display: none; }
+#btn-detonate { position: relative; }
+#btn-detonate::before { content: ""; position: absolute; inset: -22px -26px; border-radius: 50%; }   /* generous thumb target */
 .bar-right { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .joy { position: relative; flex: none; width: 92px; height: 92px; border-radius: 50%; touch-action: none; background: radial-gradient(circle, #1a3330 0 55%, #0d1d1c 56% 100%); box-shadow: inset 0 0 0 2px #2b4a45, 0 3px 6px rgba(0,0,0,0.5); }
 .joy-ring { position: absolute; inset: 10px; border-radius: 50%; border: 2px dashed rgba(127, 242, 245, 0.25); }
@@ -1313,6 +1315,20 @@ function visCol(c) {
 }
 const beltAt = (c, r) => G.conv.find(t => t.c === c && t.r === r);
 const marks = () => [G.mark, G.mark2].filter(Boolean);
+// the cube a press on this mark would catch: one sitting on it, or one that is mid-tumble off it (a slightly late press)
+function catchAt(m) {
+  const on = occupant(m.c, m.r);
+  if (on && on.id !== m.under) return on;
+  return G.cubes.find(q => q.state === "idle" && q.anim < 0.6 && q.fromC === m.c && q.fromR === m.r && q.id !== m.under && !phased(q)) || null;
+}
+// is a cube on its way onto this mark: tumbling onto it right now, or landing there on the roll that's just about to start
+function incomingAt(m) {
+  if (G.cubes.some(q => q.state === "idle" && q.anim < 1 && q.c === m.c && q.r === m.r && !phased(q))) return true;
+  if (G.phase !== "roll" || G.mods.freezeRolls > 0 || G.rollTimer > 450) return false;
+  const proxies = G.cubes.filter(q => q.state === "idle" || q.state === "rise").map(q => ({ c: q.c, r: q.r, t: q.state === "rise" ? "#" : q.type, dir: q.dir, ref: q }));
+  const plan = rollPlan(proxies, G.W);
+  return proxies.some(p => { if (p.t === "#" || p.ref.id === m.under) return false; const to = plan.get(p); return to && to.c === m.c && to.r === m.r; });
+}
 const markAt = (c, r) => marks().find(m => m.c === c && m.r === r);
 const iceAt = (c, r) => G.ice.some(g => g.c === c && g.r === r);
 // the roll interval right now: Slowstone doubles it
@@ -1772,7 +1788,10 @@ function blast() {
 function actionButton() {
   if (!canAct()) return;
   const k = G.kip;
-  if (marks().some(m => occupant(m.c, m.r))) { detonate(); return; }
+  G.pendingDet = 0;
+  if (marks().some(m => catchAt(m))) { detonate(); return; }
+  // pressed a touch early: hold the press and fire the moment the cube lands on the mark
+  if (marks().some(m => incomingAt(m))) { G.pendingDet = now() + Math.max(0, Math.min(450, G.rollTimer)) + 0.6 * rollInterval() + 150; SFX.tick(); return; }
   if (k.mt < 1 || k.sliding) { k.markQueued = true; return; }     // mark as soon as this step lands
   if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; k.settle = true; k.coast = 0; }   // pressing the button plants his feet on that square
   if (markAt(k.c, k.r)) { SFX.tick(); return; }
@@ -1805,9 +1824,11 @@ function detonate() {
   if (ms.some(m => now() - m.placed < 150)) return;
   // with Double Mark both marks fire together
   for (const m of ms) {
-    const cube = occupant(m.c, m.r);
-    if (cube && cube.id === m.under) { addFx("ghost", m.c, m.r, 250); SFX.tick(); continue; }   // still the cube it was set under
+    const cube = catchAt(m);
+    if (!cube && occupant(m.c, m.r)) { addFx("ghost", m.c, m.r, 250); SFX.tick(); continue; }   // still the cube it was set under
     if (m === G.mark) G.mark = null; else G.mark2 = null;
+    // caught a moment late as it tumbled off: it's pulled back onto the mark and taken there
+    if (cube && cube.anim < 1 && cube.fromC === m.c && cube.fromR === m.r) { cube.c = m.c; cube.r = m.r; cube.anim = 1; }
     if (cube) capture(cube);
     else { addFx("fizzle", m.c, m.r, 380); SFX.fizzle(); }
   }
@@ -2248,7 +2269,13 @@ function arrive() {
   if (k.sliding) { k.sliding = false; addFx("dust", k.c, k.r, 380); }
   return false;
 }
+function updatePendingDet() {
+  if (!G.pendingDet) return;
+  if (now() > G.pendingDet || !canAct() || !marks().length) { G.pendingDet = 0; return; }
+  if (marks().some(m => { const q = occupant(m.c, m.r); return q && q.id !== m.under; })) { G.pendingDet = 0; detonate(); }
+}
 function updateKip(dt) {
+  updatePendingDet();
   const k = G.kip;
   k.running = false;
   if (k.mt < 1) {
