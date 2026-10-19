@@ -78,6 +78,8 @@ body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-f
 .joy-knob { position: absolute; left: 50%; top: 50%; width: 42px; height: 42px; margin: -21px 0 0 -21px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #f5cf7c, #b07a2c 70%); box-shadow: 0 3px 4px rgba(0,0,0,0.5), 0 0 10px rgba(82, 227, 232, 0.25); pointer-events: none; transition: transform 0.08s; }
 .joy.active .joy-knob { transition: none; }
 body.joy-on .bar-note { display: none; }
+body.joy-on .bar-left { touch-action: none; align-self: stretch; margin-block: -10px -12px; padding-block: 10px 12px; cursor: grab; }
+.joy.active { box-shadow: inset 0 0 0 2px #52e3e8, 0 3px 6px rgba(0,0,0,0.5), 0 0 14px rgba(82, 227, 232, 0.35); }
 #btn-blast { position: relative; width: 66px; height: 66px; border: 0; padding: 0; border-radius: 50%; cursor: pointer; touch-action: manipulation; background: url("assets/ui/ui_btn_blast_normal.webp") center / contain no-repeat, radial-gradient(circle, #2f8f5f 0 60%, transparent 62%); filter: drop-shadow(0 3px 3px rgba(0,0,0,0.5)); transition: transform 0.06s, filter 0.2s, opacity 0.2s; }
 #btn-blast:disabled { opacity: 0.38; filter: grayscale(0.7) drop-shadow(0 3px 3px rgba(0,0,0,0.5)); cursor: default; }
 #btn-blast:not(:disabled) { filter: drop-shadow(0 3px 3px rgba(0,0,0,0.5)) drop-shadow(0 0 12px rgba(90, 240, 150, 0.8)); }
@@ -1772,7 +1774,7 @@ function actionButton() {
   const k = G.kip;
   if (marks().some(m => occupant(m.c, m.r))) { detonate(); return; }
   if (k.mt < 1 || k.sliding) { k.markQueued = true; return; }     // mark as soon as this step lands
-  if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; k.settle = true; }   // pressing the button plants his feet on that square
+  if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; k.settle = true; k.coast = 0; }   // pressing the button plants his feet on that square
   if (markAt(k.c, k.r)) { SFX.tick(); return; }
   placeMark(k.c, k.r);
 }
@@ -2148,7 +2150,7 @@ function freeMove(dt) {
   k.stepMs = runStepMs();
   const vmax = 1 / k.stepMs;
   let dir = inputDir(), tx = 0, ty = 0;
-  if (dir) { k.wp = null; k.stopAt = null; const m = dir.m == null ? 1 : dir.m; tx = dir.x * vmax * m; ty = dir.y * vmax * m; k.lastPush = { tx, ty, t: now() }; k.settle = false; }
+  if (dir) { k.wp = null; k.stopAt = null; const m = dir.m == null ? 1 : dir.m; tx = dir.x * vmax * m; ty = dir.y * vmax * m; k.lastPush = { tx, ty, t: now() }; k.settle = false; k.coast = 0; }
   else if (k.wp && k.wp.length) {
     // round the corners of a path: once near a waypoint that isn't the last, head for the next one
     while (k.wp.length > 1 && Math.hypot(k.wp[0].c - k.x, k.wp[0].r - k.y) < 0.45) k.wp.shift();
@@ -2156,7 +2158,8 @@ function freeMove(dt) {
     if (d < 0.05) { k.x = w.c; k.y = w.r; k.wp = null; k.vx = k.vy = 0; }
     else { const sp = k.wp.length > 1 ? vmax : Math.min(vmax, d / 90); tx = dx / d * sp; ty = dy / d * sp; }
   }
-  else if (k.hadInput && Math.hypot(k.vx || 0, k.vy || 0) > vmax * 0.55)
+  else if (k.coast > 0 && k.lastPush) { k.coast -= dt; tx = k.lastPush.tx; ty = k.lastPush.ty; }   // joystick thumb briefly off: keep running
+  else if ((k.hadInput || k.coasted) && Math.hypot(k.vx || 0, k.vy || 0) > vmax * 0.55)
     // just let go at speed: a short skid, and he stops right there (wherever his feet are is his square)
     k.skid = { t: 0, dir: k.face.dr < 0 ? "up" : k.face.dr > 0 ? "down" : k.face.dc < 0 ? "left" : "right" };
   // momentum: a quick push-off and a short skid to a stop, never an instant start or halt
@@ -2168,7 +2171,7 @@ function freeMove(dt) {
   const sp = Math.hypot(k.vx, k.vy);
   // letting go at speed plays the skid; pushing again cancels it
   if (dir) k.skid = null;
-  k.hadInput = !!dir;
+  k.coasted = k.coast > 0 && !dir; k.hadInput = !!dir;
   if (!tx && !ty && sp < vmax * 0.12) {
     k.vx = k.vy = 0; k.pushing = false;
     // after marking, he steps onto the middle of the marked square
@@ -3327,7 +3330,7 @@ stageEl.addEventListener("pointerdown", e => {
   ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: now(), mode: "pending", moved: 0, ax: 0, ay: 0, dir: null };
   try { stageEl.setPointerCapture(e.pointerId); } catch (err) {}
   // thumb lifted and put straight back down (to re-aim, mark or dodge): carry on running the same way, no restart
-  if (G && canAct() && lastDrag.vec && now() - lastDrag.t < 320) {
+  if (G && canAct() && lastDrag.vec && now() - lastDrag.t < 450) {
     const v = lastDrag.vec, r = 18 + 26 * (v.m == null ? 1 : v.m);
     ptr.mode = "drag"; ptr.resume = true;
     // and pick his speed straight back up instead of accelerating from a standstill
@@ -3488,29 +3491,47 @@ function applyControls() {
   // the power-up slot moves beside Blast so the left thumb has the joystick
   (on ? $(".bar-right") : $(".bar-left")).prepend($("#pu-slot"));
 }
-joy.addEventListener("pointerdown", e => {
+// the whole left side of the bar is the grab zone: thumb down anywhere there takes the stick
+const joyZone = $(".bar-left");
+joyZone.addEventListener("pointerdown", e => {
+  if (!SAVE.settings.joystick || e.target.closest("button")) return;
   e.preventDefault(); e.stopPropagation(); ensureAudio();
-  const r = joy.getBoundingClientRect();
-  joyPtr = { id: e.pointerId, cx: r.left + r.width / 2, cy: r.top + r.height / 2, vec: null };
-  try { joy.setPointerCapture(e.pointerId); } catch (err) {}
+  const r = joy.getBoundingClientRect(), bx = r.left + r.width / 2, by = r.top + r.height / 2;
+  joyPtr = { id: e.pointerId, cx: bx, cy: by, vec: null };
+  if (G && canAct() && lastDrag.vec && now() - lastDrag.t < 450) {
+    // thumb lifted and put back anywhere nearby: keep running the same way, at full speed, until it steers
+    const v = lastDrag.vec, rr = 14 + 22 * (v.m == null ? 1 : v.m);
+    joyPtr.cx = e.clientX - v.x * rr; joyPtr.cy = e.clientY - v.y * rr; joyPtr.vec = v;
+    const k = G.kip; if (k.lastPush && k.mt >= 1) { k.vx = k.lastPush.tx; k.vy = k.lastPush.ty; k.skid = null; }
+  } else if (Math.hypot(e.clientX - bx, e.clientY - by) > 40) {
+    // landed off the stick: it re-centres under the thumb, so you never have to hit it exactly
+    joyPtr.cx = e.clientX; joyPtr.cy = e.clientY;
+  }
+  try { joyZone.setPointerCapture(e.pointerId); } catch (err) {}
   joy.classList.add("active"); joyMove(e);
 });
 // analog: Kip runs the way the stick points, at full speed past a small dead zone
 function joyMove(e) {
   if (!joyPtr || e.pointerId !== joyPtr.id) return;
-  const dx = e.clientX - joyPtr.cx, dy = e.clientY - joyPtr.cy, h = Math.hypot(dx, dy), d = Math.min(30, h), a = Math.atan2(dy, dx);
-  knob.style.transform = `translate(${Math.cos(a) * d}px, ${Math.sin(a) * d}px)`;
-  joyPtr.vec = h < 10 ? null : { x: dx / h, y: dy / h, m: clamp((h - 6) / 22, 0.4, 1) };
+  let dx = e.clientX - joyPtr.cx, dy = e.clientY - joyPtr.cy, h = Math.hypot(dx, dy);
+  // the centre trails the thumb past the rim, so reversing is a short move, never a long swipe back
+  if (h > 40) { joyPtr.cx = e.clientX - dx / h * 40; joyPtr.cy = e.clientY - dy / h * 40; dx = dx / h * 40; dy = dy / h * 40; h = 40; }
+  const d = Math.min(30, h), a = Math.atan2(dy, dx);
+  knob.style.transform = h ? `translate(${Math.cos(a) * d}px, ${Math.sin(a) * d}px)` : "";
+  if (h >= 8) { joyPtr.vec = { x: dx / h, y: dy / h, m: clamp((h - 6) / 22, 0.4, 1) }; joyPtr.steered = true; }
+  else if (joyPtr.steered) joyPtr.vec = null;
   if (joyPtr.vec && G) G.kip.wp = null;
 }
 function joyEnd(e) {
   if (!joyPtr || e.pointerId !== joyPtr.id) return;
+  lastDrag = { vec: joyPtr.vec, t: now() };
+  if (joyPtr.vec && G) G.kip.coast = 160;      // a thumb lifted off the stick for a moment doesn't stop him
   joyPtr = null;
   joy.classList.remove("active"); knob.style.transform = "";
 }
-joy.addEventListener("pointermove", e => { e.stopPropagation(); joyMove(e); });
-joy.addEventListener("pointerup", e => { e.stopPropagation(); joyEnd(e); });
-joy.addEventListener("pointercancel", e => { e.stopPropagation(); joyEnd(e); });
+joyZone.addEventListener("pointermove", e => { if (joyPtr) { e.stopPropagation(); joyMove(e); } });
+joyZone.addEventListener("pointerup", e => { if (joyPtr) { e.stopPropagation(); joyEnd(e); } });
+joyZone.addEventListener("pointercancel", e => { if (joyPtr) { e.stopPropagation(); joyEnd(e); } });
 
 // ---------- Settings screen and save codes ----------
 const SET_KEYS = ["sound", "music", "haptics", "shake", "flashes", "symbols", "joystick"];
