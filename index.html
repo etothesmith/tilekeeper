@@ -1454,7 +1454,14 @@ function onLand(c) {
   if (c.type === "E" && c.litAt != null && G.rollCount > c.litAt && c.state === "idle") (G.pendingEmbers || (G.pendingEmbers = [])).push(c);
   const k = G.kip;
   // crushed if Kip stands where it landed, or where a Frost cube slid through
-  if (G.phase === "roll" && k.fall < 0 && k.stun <= 0 && !phased(c) && ((k.c === c.c && k.r === c.r) || (c.fromC === c.c && k.c === c.c && k.r > c.fromR && k.r <= c.r))) crush();
+  if (G.phase === "roll" && k.fall < 0 && k.stun <= 0 && !phased(c) && ((k.c === c.c && k.r === c.r) || (c.fromC === c.c && k.c === c.c && k.r > c.fromR && k.r <= c.r))) {
+    // dashing across in front of it and already on the way out: he squeezes through to the next tile instead
+    const off = (k.x == null ? k.c : k.x) - c.c, s = Math.sign(off), nc = k.c + s;
+    if (k.mt >= 1 && Math.abs(off) >= 0.2 && s && Math.sign(k.vx || 0) === s && freeAt(nc, k.r)) {
+      leftTile(k.c, k.r); k.pc = k.c; k.pr = k.r; k.c = nc; k.x = c.c + s * (0.5 + KIP_R); k.y = k.r;
+      addFx("dust", c.c, k.r, 300); SFX.step();
+    } else crush();
+  }
 }
 
 function swallow(c) {
@@ -2167,6 +2174,26 @@ function kipPos() {
   return { c: k.x, r: k.y };
 }
 const freeAt = (c, r) => c >= 0 && c < G.W && r >= 0 && r < G.L && !blocked(c, r);
+// Kip's body collision while running. Same as freeAt, except a cube that is still tipping toward a tile
+// (rolling down its column, under halfway) doesn't wall that tile off sideways: what you see is still an
+// open tile, so Kip can dash across in front of it. He's still crushed if he's on it when the cube lands.
+// Only if he can make it: the tile opens when there's time left to get past its middle before the cube lands.
+// Running head-on into an oncoming cube's landing tile stays blocked.
+function kipOpen(c, r, ax, s) {
+  if (c < 0 || c >= G.W || r < 0 || r >= G.L || isHole(c, r)) return false;
+  for (const q of G.cubes) {
+    if (!(q.state === "idle" || q.state === "rise") || phased(q)) continue;
+    const atOrigin = q.anim < 1 && q.fromC === c && q.fromR === r;
+    const inPath = q.c === c && (q.r === r || (q.anim < 1 && q.fromC === c && r >= q.fromR && r <= q.r));
+    if (!atOrigin && !inPath) continue;
+    if (ax === "x" && s && q.state === "idle" && q.anim < 0.5 && !atOrigin && q.fromC === q.c) {
+      const k = G.kip, left = (0.5 - q.anim) * 0.6 * rollInterval(), need = Math.abs(c + s * 0.2 - k.x) * (k.stepMs || runStepMs()) * 1.15;
+      if (need <= left) continue;
+    }
+    return false;
+  }
+  return true;
+}
 // swipes: run to the next tile centre that way (up to 3 lined up)
 function queueStep(dc, dr) {
   if (!canAct()) return;
@@ -2198,7 +2225,7 @@ function slideAxis(k, ax, d) {
   const np = pos + d, cur = Math.round(pos), lead = Math.round(np + s * KIP_R);
   const lanes = [...new Set([Math.round(other - KIP_R * 0.8), Math.round(other + KIP_R * 0.8)])];
   let lim = np;
-  const own = Math.round(other), open = o => ax === "x" ? freeAt(t0, o) : freeAt(o, t0);
+  const own = Math.round(other), open = o => ax === "x" ? kipOpen(t0, o, ax, s) : kipOpen(o, t0, ax, s);
   let t0;
   for (let t = cur + s; s > 0 ? t <= lead : t >= lead; t += s) {
     t0 = t;
