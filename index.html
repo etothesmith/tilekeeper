@@ -293,7 +293,7 @@ body.joy-on .bar-left { touch-action: none; align-self: stretch; margin-block: -
       <h2>How to play</h2>
       <ul class="howto" id="howto">
         <li><span class="k">↕</span><span><b>Press and drag</b> anywhere to run (Kip keeps running while you hold), use the joystick, or <b>tap a tile</b> to run there.</span></li>
-        <li><span class="k">◎</span><span>Stand in a cube's path and press the <b>brass button</b> to mark the tile under Kip. Then <b>step off</b>.</span></li>
+        <li><span class="k">◎</span><span>Stand in a cube's path and press the <b>brass button</b> (or tap Kip) to mark the tile under him. Running with one thumb? Tap anywhere with a second finger. Then <b>step off</b>.</span></li>
         <li><span class="k">✦</span><span>When a cube rolls onto your mark, press the brass button again (or tap the cube) to capture it.</span></li>
         <li><span class="k">!</span><span>Don't get rolled over, and don't let cubes fall off the edge. Too many spills and the floor crumbles.</span></li>
       </ul>
@@ -3427,7 +3427,7 @@ function drawDebug() {
 function drawBackgroundIdle() { camY = 0; shakeX = shakeY = 0; drawBackground(); }
 
 // ---------- Input ----------
-let ptr = null, lastTap = 0, lastDrag = { vec: null, t: 0 };
+let ptr = null, lastTap = 0, lastDrag = { vec: null, t: 0 }, second = null;
 const pointers = new Set();
 const swipeMin = () => Math.max(24, 0.06 * window.innerWidth);
 function localXY(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
@@ -3437,7 +3437,7 @@ stageEl.addEventListener("pointerdown", e => {
   if (e.isPrimary) pointers.clear();          // a lost pointerup must never leave a ghost finger behind
   pointers.add(e.pointerId);
   // two fingers held together pauses; a stray second touch (thumb landing as the other lifts) never interrupts a run
-  if (pointers.size >= 2) { setTimeout(() => { if (pointers.size >= 2 && G && (G.phase === "roll" || G.phase === "rise" || G.phase === "crushed")) { ptr = null; dragStick = null; setPaused(true); } }, 220); return; }
+  if (pointers.size >= 2) { second = { id: e.pointerId, t: now(), x: e.clientX, y: e.clientY }; setTimeout(() => { if (pointers.size >= 2 && G && (G.phase === "roll" || G.phase === "rise" || G.phase === "crushed")) { ptr = null; dragStick = null; setPaused(true); } }, 220); return; }
   ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: now(), mode: "pending", moved: 0, ax: 0, ay: 0, dir: null };
   try { stageEl.setPointerCapture(e.pointerId); } catch (err) {}
   // thumb lifted and put straight back down (to re-aim, mark or dodge): carry on running the same way, no restart
@@ -3466,6 +3466,13 @@ stageEl.addEventListener("pointermove", e => {
 });
 function endPointer(e, cancelled) {
   pointers.delete(e.pointerId);
+  // a quick tap with a second finger while the first one steers Kip works the brass button (mark / capture)
+  if (second && e.pointerId === second.id) {
+    const quick = !cancelled && now() - second.t < 250 && Math.hypot(e.clientX - second.x, e.clientY - second.y) < 14;
+    second = null;
+    if (quick && G && canAct()) actionButton();
+    return;
+  }
   if (!ptr || e.pointerId !== ptr.id) return;
   if (!cancelled && ptr.mode === "pending" && ptr.moved < 10 && now() - ptr.t < 250) {
     const p = localXY(e); handleTap(p.x, p.y); lastTap = now();
@@ -3481,8 +3488,14 @@ function endPointer(e, cancelled) {
 stageEl.addEventListener("pointerup", e => endPointer(e, false));
 stageEl.addEventListener("pointercancel", e => endPointer(e, true));
 
+// Kip's on-screen body: he stands about a tile tall, so his head and chest are drawn over the rows behind him
+function onKip(x, y) {
+  const k = G.kip, p = kipPos(), cx = OX + (p.c + 0.5) * T + shakeX, foot = proj(p.r + 0.5, 0);
+  return Math.abs(x - cx) <= T * 0.55 && y >= foot - T * 1.1 && y <= foot + RH * 0.5;
+}
 function handleTap(x, y, noWalk) {
   if (!canAct()) return;
+  const tapKip = onKip(x, y);
   // cubes first, front-most first
   const hits = G.cubes.filter(c => c.state === "idle").map(c => ({ c, geo: cubeGeom(c) }))
     .sort((a, b) => Math.max(...b.geo.pts.map(p => p[0])) - Math.max(...a.geo.pts.map(p => p[0])));
@@ -3497,10 +3510,13 @@ function handleTap(x, y, noWalk) {
       else if (glyph && near) fireGlyph(glyph);
       else if (h.c.type === "E" && h.c.litAt == null && near) lightEmber(h.c);
       else if (G.greens.some(g => g.c === col && g.r === row)) blast();
+      else if (tapKip) actionButton();          // a cube drawn over Kip: the tap was meant for Kip
       else { addFx("ghost", col, row, 250); SFX.tick(); }
       return;
     }
   }
+  // tapping Kip himself (anywhere on his body, not just the tile under his feet) marks where he stands
+  if (tapKip) { actionButton(); return; }
   const c = Math.floor((x - OX - shakeX) / T);
   const r = Math.floor((y - shakeY + camY - Y0 - BAND) / RH);
   if (c < 0 || c >= G.W || r < 0 || r >= G.L) return;
@@ -3957,7 +3973,7 @@ function showResult({ stars, BR, newBest, cleared }) {
 }
 
 // test hook for automated checks; only exists when the page URL contains "debug"
-if (/debug/.test(location.search)) window.__tk = { get G() { return G; }, get LV() { return LV; }, get drag() { return dragStick; }, inputDir, get joy() { return joyPtr; }, keysHeld, get ptr() { return ptr; }, collapseRow, addSpill, actionButton, walkTo, kipPos, applyControls, forceMark: (c, r) => { G.mark = { c, r, placed: 0, under: null }; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
+if (/debug/.test(location.search)) window.__tk = { kipScreen: () => { const p = kipPos(), r = cv.getBoundingClientRect(); return { cx: r.left + OX + (p.c + 0.5) * T, foot: r.top + proj(p.r + 0.5, 0), T, RH }; }, get G() { return G; }, get LV() { return LV; }, get drag() { return dragStick; }, inputDir, get joy() { return joyPtr; }, keysHeld, get ptr() { return ptr; }, collapseRow, addSpill, actionButton, walkTo, kipPos, applyControls, forceMark: (c, r) => { G.mark = { c, r, placed: 0, under: null }; }, finishLevel, startLevel, startMode, playCutscene, showTitle, MUSIC, nextWave, usePowerup, startEvent, bossAttack, pickUp, LEVELS, SAVE, lightEmber, fireGlyph, bossDamage, explodeEmber, rollTick, placeMark, detonate, blast, queueStep, occupant, curRow };
 
 // ---------- Offline play: a service worker caches the game after the first visit (skipped where it isn't allowed) ----------
 try { if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) {}
