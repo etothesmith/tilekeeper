@@ -182,7 +182,32 @@ body.joy-on .bar-left { touch-action: none; align-self: stretch; margin-block: -
 #cut-skip { min-height: 44px; font-size: 16px; padding: 0 18px; }
 @media (prefers-reduced-motion: reduce) { .cut-fallback { animation: none; } }
 .title-tools { display: flex; justify-content: center; gap: 8px; }
-.title-tools .btn { font-size: 16px; min-height: 44px; padding: 0 16px; flex: 1; }
+.title-tools .btn { font-size: 16px; min-height: 44px; padding: 0 8px; flex: 1; white-space: nowrap; }
+/* Intro: story splash with the pitch, then a Menu button into the options */
+#ov-intro { background: #0b1916; align-content: space-between; justify-items: center; backdrop-filter: none; overflow: hidden; padding-block: max(20px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-bottom, 0px)); }
+.intro-bg { position: absolute; inset: -4%; background: url("assets/promo/promo_splash.webp") 30% center / cover no-repeat; animation: introDrift 18s ease-in-out infinite alternate; z-index: -1; }
+.intro-bg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(5,12,11,0.35), rgba(5,12,11,0) 26%, rgba(5,12,11,0) 46%, rgba(5,12,11,0.82) 72%, rgba(5,12,11,0.96)); }
+@keyframes introDrift { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.07) translate(-2%, -1.5%); } }
+#ov-intro .title-head { animation: introIn 0.9s ease-out both; }
+.intro-tag { font-size: 15px; font-weight: 600; color: var(--ink); text-align: center; max-width: 300px; text-shadow: 0 1px 2px #000, 0 0 10px rgba(0,0,0,0.8); text-wrap: balance; }
+.intro-brief { width: min(100%, 380px); display: grid; gap: 14px; }
+.intro-story { display: grid; gap: 10px; margin: 0; }
+.intro-story p { margin: 0; font-size: 17px; line-height: 1.45; color: var(--ink); text-shadow: 0 1px 3px rgba(0,0,0,0.9); opacity: 0; animation: introIn 0.8s ease-out forwards; }
+.intro-story p:nth-child(1) { animation-delay: 0.5s; }
+.intro-story p:nth-child(2) { animation-delay: 1.4s; }
+.intro-story b { color: var(--glyph); font-weight: 700; }
+.intro-facts { display: flex; justify-content: center; gap: 8px; list-style: none; margin: 0; padding: 0; opacity: 0; animation: introIn 0.7s ease-out 2.2s forwards; }
+.intro-facts li { flex: 1; display: grid; justify-items: center; padding: 8px 4px; border-radius: 12px; background: rgba(11,24,24,0.72); border: 1px solid rgba(224,169,74,0.35); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.intro-facts b { font-family: var(--font-display); font-weight: 400; font-size: 24px; line-height: 1.1; letter-spacing: 0; color: #ffd889; }
+#btn-menu { font-size: 26px; min-height: 60px; opacity: 0; animation: introIn 0.6s ease-out 2.6s forwards, menuGlow 2.4s ease-in-out 3.2s infinite; }
+@keyframes menuGlow { 0%, 100% { box-shadow: 0 4px 0 #7a5418, 0 0 0 rgba(255,216,137,0); } 50% { box-shadow: 0 4px 0 #7a5418, 0 0 22px rgba(255,216,137,0.55); } }
+.intro-credit { font-size: 12px; color: var(--muted); text-align: center; letter-spacing: 0.04em; }
+@keyframes introIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (max-height: 640px) { .intro-story p { font-size: 15px; } .intro-facts b { font-size: 20px; } }
+@media (prefers-reduced-motion: reduce) { .intro-bg, #ov-intro .title-head, .intro-story p, .intro-facts, #btn-menu { animation: none; opacity: 1; } }
+#btn-to-intro { position: absolute; top: max(12px, env(safe-area-inset-top, 0px)); left: max(12px, env(safe-area-inset-left, 0px)); min-height: 40px; padding: 0 12px; font-size: 15px; background: rgba(14,31,32,0.85); }
+#ov-howto .card { gap: 14px; }
+#ov-title .title-head { padding-top: 40px; }
 .best { font-size: 14px; text-align: center; color: var(--muted); letter-spacing: 0.04em; }
 @media (prefers-reduced-motion: reduce) { #hint, .star { transition: none; } }
 </style>
@@ -225,18 +250,30 @@ body.joy-on .bar-left { touch-action: none; align-self: stretch; margin-block: -
     </div>
   </footer>
 
-  <div class="overlay" id="ov-title">
+  <div class="overlay" id="ov-intro">
+    <div class="intro-bg" aria-hidden="true"></div>
+    <div class="title-head">
+      <div class="title-plate"><div class="logo">TILEKEEPER</div></div>
+      <div class="intro-tag">A puzzle adventure across five floating worlds</div>
+    </div>
+    <div class="intro-brief">
+      <div class="intro-story">
+        <p>Gran has vanished into the Loom, and runaway <b>Tumblers</b> are grinding the floating worlds to dust.</p>
+        <p>Take up her <b>Marking Glove</b>, mark the tiles in their path, and capture every cube before the floor gives way.</p>
+      </div>
+      <ul class="intro-facts"><li><b>5</b>Worlds</li><li><b>25</b>Levels</li><li><b>5</b>Bosses</li></ul>
+      <button class="btn" id="btn-menu">Menu</button>
+      <div class="intro-credit">Art by Gemini · Code by Claude · Directed by Coach Smith</div>
+    </div>
+  </div>
+
+  <div class="overlay" id="ov-title" hidden>
+    <button class="btn secondary" id="btn-to-intro" aria-label="Back to the intro">◀ Intro</button>
     <div class="title-head">
       <div class="title-plate"><div class="logo">TILEKEEPER</div></div>
       <div class="title-sub" id="title-sub">Level 1-1 · First Light</div>
     </div>
     <div class="card">
-      <ul class="howto" id="howto">
-        <li><span class="k">↕</span><span><b>Press and drag</b> anywhere to run (Kip keeps running while you hold), use the joystick, or <b>tap a tile</b> to run there.</span></li>
-        <li><span class="k">◎</span><span>Stand in a cube's path and press the <b>brass button</b> to mark the tile under Kip. Then <b>step off</b>.</span></li>
-        <li><span class="k">✦</span><span>When a cube rolls onto your mark, press the brass button again (or tap the cube) to capture it.</span></li>
-        <li><span class="k">!</span><span>Don't get rolled over, and don't let cubes fall off the edge. Too many spills and the floor crumbles.</span></li>
-      </ul>
       <div class="modes" role="tablist" aria-label="Game mode">
         <button role="tab" class="mode-tab" id="tab-story" data-mode="story">Story</button>
         <button role="tab" class="mode-tab" id="tab-quick" data-mode="quick">Quick</button>
@@ -247,7 +284,20 @@ body.joy-on .bar-left { touch-action: none; align-self: stretch; margin-block: -
       <div class="levels" id="level-list" role="group" aria-label="Choose a level"></div>
       <div class="best" id="best-line"></div>
       <button class="btn" id="btn-play">Play</button>
-      <div class="title-tools"><button class="btn secondary" id="btn-quick">⚡ Quick play</button><button class="btn secondary" id="btn-settings">Settings</button></div>
+      <div class="title-tools"><button class="btn secondary" id="btn-quick">⚡ Quick play</button><button class="btn secondary" id="btn-howto">How to play</button><button class="btn secondary" id="btn-settings">Settings</button></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="ov-howto" hidden>
+    <div class="card">
+      <h2>How to play</h2>
+      <ul class="howto" id="howto">
+        <li><span class="k">↕</span><span><b>Press and drag</b> anywhere to run (Kip keeps running while you hold), use the joystick, or <b>tap a tile</b> to run there.</span></li>
+        <li><span class="k">◎</span><span>Stand in a cube's path and press the <b>brass button</b> to mark the tile under Kip. Then <b>step off</b>.</span></li>
+        <li><span class="k">✦</span><span>When a cube rolls onto your mark, press the brass button again (or tap the cube) to capture it.</span></li>
+        <li><span class="k">!</span><span>Don't get rolled over, and don't let cubes fall off the edge. Too many spills and the floor crumbles.</span></li>
+      </ul>
+      <button class="btn" id="btn-howto-done">Got it</button>
     </div>
   </div>
 
@@ -3756,7 +3806,6 @@ function renderLevels() {
   });
   $("#title-sub").textContent = `Level ${LV.id} · ${LV.name}`;
   $("#best-line").textContent = starsLine();
-  $("#howto").hidden = LEVELS.some(l => starsOf(l) > 0);   // the how-to steps aside once you've cleared a level
   // world headers get a replay button once their story has been seen
   list.querySelectorAll(".world-head").forEach((h, wi) => {
     const key = `w${wi + 1}_intro`;
@@ -3766,7 +3815,6 @@ function renderLevels() {
   document.querySelectorAll(".mode-tab").forEach(b => b.setAttribute("aria-selected", String(b.dataset.mode === titleMode)));
   const story = titleMode === "story", info = $("#mode-info"), open = modesOpen();
   list.hidden = !story; info.hidden = story;
-  if (!story) $("#howto").hidden = true;
   $("#best-line").hidden = !story;
   $("#btn-play").disabled = !story && !open;
   $("#btn-quick").hidden = titleMode === "quick";
@@ -3813,12 +3861,22 @@ function showTitle() {
 }
 renderLevels();
 
-$("#btn-play").addEventListener("click", () => titleMode === "story" ? startLevel(selected) : startMode(titleMode));
+// Intro -> Menu. The intro shows once per launch; the menu's back button returns to it.
+function showMenu() { ensureAudio(); SFX.tick(); $("#ov-intro").hidden = true; renderLevels(); const t = $("#ov-title"); t.hidden = false; t.scrollTop = 0; $("#btn-play").focus({ preventScroll: true }); }
+$("#btn-menu").addEventListener("click", showMenu);
+$("#btn-to-intro").addEventListener("click", () => { $("#ov-title").hidden = true; $("#ov-intro").hidden = false; $("#btn-menu").focus(); });
+// How to play: from the menu any time, and once automatically before a brand-new player's first level
+let howtoAfter = null;
+function openHowto(after) { howtoAfter = after || null; $("#btn-howto-done").textContent = after ? "Let's go" : "Got it"; $("#ov-howto").hidden = false; $("#btn-howto-done").focus(); }
+$("#btn-howto").addEventListener("click", () => { ensureAudio(); openHowto(); });
+$("#btn-howto-done").addEventListener("click", () => { SAVE.seen.howto = true; writeSave(); $("#ov-howto").hidden = true; const a = howtoAfter; howtoAfter = null; if (a) a(); else $("#btn-play").focus(); });
+const playChosen = () => titleMode === "story" ? startLevel(selected) : startMode(titleMode);
+$("#btn-play").addEventListener("click", () => { if (!SAVE.seen.howto && !LEVELS.some(l => starsOf(l) > 0)) openHowto(playChosen); else playChosen(); });
 $("#btn-quick").addEventListener("click", () => startMode("quick"));
 $("#btn-again").addEventListener("click", () => curMode === "story" ? startLevel(selected) : startMode(curMode));
 document.querySelectorAll(".mode-tab").forEach(b => b.addEventListener("click", () => { ensureAudio(); titleMode = b.dataset.mode; if (titleMode === "story") { LV = LEVELS[selected]; } renderLevels(); }));
 // music starts with the first touch (browsers block audio until then)
-window.addEventListener("pointerdown", () => { ensureAudio(); if (!G && !$("#ov-title").hidden) MUSIC.play(0); }, { once: true });
+window.addEventListener("pointerdown", () => { ensureAudio(); if (!G && (!$("#ov-title").hidden || !$("#ov-intro").hidden)) MUSIC.play(0); }, { once: true });
 $("#btn-next").addEventListener("click", () => startLevel(Math.min(LEVELS.length - 1, selected + 1)));
 $("#btn-levels").addEventListener("click", showTitle);
 $("#btn-quit").addEventListener("click", showTitle);
