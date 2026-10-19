@@ -1371,14 +1371,20 @@ function catchAt(m) {
   if (on && on.id !== m.under) return on;
   return G.cubes.find(q => q.state === "idle" && q.anim < 0.6 && q.fromC === m.c && q.fromR === m.r && q.id !== m.under && !phased(q)) || null;
 }
-// is a cube on its way onto this mark: tumbling onto it right now, or landing there on the roll that's just about to start
-function incomingAt(m) {
-  if (G.cubes.some(q => q.state === "idle" && q.anim < 1 && q.c === m.c && q.r === m.r && !phased(q))) return true;
-  if (G.phase !== "roll" || G.mods.freezeRolls > 0 || G.rollTimer > 450) return false;
+// ms until a cube lands on this mark (it lands when its tumble passes halfway), or Infinity if none is on its way.
+// Looks at the tumble happening now and the roll that starts next.
+function landsOnMarkIn(m) {
+  const half = 0.3 * rollInterval();
+  let best = Infinity;
+  for (const q of G.cubes) if (q.state === "idle" && q.anim < 0.5 && q.c === m.c && q.r === m.r && q.id !== m.under && !phased(q)) best = Math.min(best, (0.5 - q.anim) * 2 * half);
+  if (best < Infinity || G.phase !== "roll" || G.mods.freezeRolls > 0) return best;
   const proxies = G.cubes.filter(q => q.state === "idle" || q.state === "rise").map(q => ({ c: q.c, r: q.r, t: q.state === "rise" ? "#" : q.type, dir: q.dir, ref: q }));
   const plan = rollPlan(proxies, G.W);
-  return proxies.some(p => { if (p.t === "#" || p.ref.id === m.under) return false; const to = plan.get(p); return to && to.c === m.c && to.r === m.r; });
+  if (proxies.some(p => { if (p.t === "#" || p.ref.id === m.under) return false; const to = plan.get(p); return to && to.c === m.c && to.r === m.r; })) best = Math.max(0, G.rollTimer) + G.freeze + half;
+  return best;
 }
+// a press this close to a cube landing on a mark is an early capture, not a new mark
+const EARLY_PRESS_MS = 300;
 const markAt = (c, r) => marks().find(m => m.c === c && m.r === r);
 const iceAt = (c, r) => G.ice.some(g => g.c === c && g.r === r);
 // the roll interval right now: Slowstone doubles it
@@ -1848,7 +1854,8 @@ function actionButton() {
   G.pendingDet = 0;
   if (marks().some(m => catchAt(m))) { detonate(); return; }
   // pressed a touch early: hold the press and fire the moment the cube lands on the mark
-  if (marks().some(m => incomingAt(m))) { G.pendingDet = now() + Math.max(0, Math.min(450, G.rollTimer)) + 0.6 * rollInterval() + 150; SFX.tick(); return; }
+  const soon = Math.min(...marks().map(landsOnMarkIn), Infinity);
+  if (soon <= EARLY_PRESS_MS) { G.pendingDet = now() + soon + 150; SFX.tick(); return; }
   if (k.mt < 1 || k.sliding) { k.markQueued = true; return; }     // mark as soon as this step lands
   if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; k.settle = true; k.coast = 0; }   // pressing the button plants his feet on that square
   if (markAt(k.c, k.r)) { SFX.tick(); return; }
