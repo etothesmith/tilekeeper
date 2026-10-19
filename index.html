@@ -1772,7 +1772,7 @@ function actionButton() {
   const k = G.kip;
   if (marks().some(m => occupant(m.c, m.r))) { detonate(); return; }
   if (k.mt < 1 || k.sliding) { k.markQueued = true; return; }     // mark as soon as this step lands
-  if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; }   // pressing the button plants his feet
+  if (!inputDir()) { k.vx = k.vy = 0; k.skid = null; k.wp = null; k.settle = true; }   // pressing the button plants his feet on that square
   if (markAt(k.c, k.r)) { SFX.tick(); return; }
   placeMark(k.c, k.r);
 }
@@ -2148,7 +2148,7 @@ function freeMove(dt) {
   k.stepMs = runStepMs();
   const vmax = 1 / k.stepMs;
   let dir = inputDir(), tx = 0, ty = 0;
-  if (dir) { k.wp = null; const m = dir.m == null ? 1 : dir.m; tx = dir.x * vmax * m; ty = dir.y * vmax * m; }
+  if (dir) { k.wp = null; k.stopAt = null; const m = dir.m == null ? 1 : dir.m; tx = dir.x * vmax * m; ty = dir.y * vmax * m; k.lastPush = { tx, ty, t: now() }; k.settle = false; }
   else if (k.wp && k.wp.length) {
     // round the corners of a path: once near a waypoint that isn't the last, head for the next one
     while (k.wp.length > 1 && Math.hypot(k.wp[0].c - k.x, k.wp[0].r - k.y) < 0.45) k.wp.shift();
@@ -2156,20 +2156,26 @@ function freeMove(dt) {
     if (d < 0.05) { k.x = w.c; k.y = w.r; k.wp = null; k.vx = k.vy = 0; }
     else { const sp = k.wp.length > 1 ? vmax : Math.min(vmax, d / 90); tx = dx / d * sp; ty = dy / d * sp; }
   }
+  else if (k.hadInput && Math.hypot(k.vx || 0, k.vy || 0) > vmax * 0.55)
+    // just let go at speed: a short skid, and he stops right there (wherever his feet are is his square)
+    k.skid = { t: 0, dir: k.face.dr < 0 ? "up" : k.face.dr > 0 ? "down" : k.face.dc < 0 ? "left" : "right" };
   // momentum: a quick push-off and a short skid to a stop, never an instant start or halt
-  const f = Math.min(1, dt / (tx || ty ? 70 : 40));
+  // turning hard or reversing bites faster than a normal push-off
+  const rev = (tx || ty) && (k.vx || 0) * tx + (k.vy || 0) * ty < 0;
+  const f = Math.min(1, dt / (rev ? 40 : tx || ty ? 65 : 45));
   k.vx = (k.vx || 0) + (tx - (k.vx || 0)) * f;
   k.vy = (k.vy || 0) + (ty - (k.vy || 0)) * f;
   const sp = Math.hypot(k.vx, k.vy);
   // letting go at speed plays the skid; pushing again cancels it
-  if (tx || ty) k.skid = null;
-  else if (k.hadInput && sp > vmax * 0.55 && !k.skid) k.skid = { t: 0, dir: k.face.dr < 0 ? "up" : k.face.dr > 0 ? "down" : k.face.dc < 0 ? "left" : "right" };
-  k.hadInput = !!(dir && (tx || ty));
-  if (!tx && !ty && sp < vmax * 0.3) {
-    // coming to rest: ease onto the middle of the square under his feet, so the mark always lands where he looks
+  if (dir) k.skid = null;
+  k.hadInput = !!dir;
+  if (!tx && !ty && sp < vmax * 0.12) {
     k.vx = k.vy = 0; k.pushing = false;
-    const e = Math.min(1, dt / 90), gx = k.c - k.x, gy = k.r - k.y;
-    if (Math.abs(gx) > 0.002 || Math.abs(gy) > 0.002) { k.x += gx * e; k.y += gy * e; } else { k.x = k.c; k.y = k.r; }
+    // after marking, he steps onto the middle of the marked square
+    if (k.settle) {
+      const e = Math.min(1, dt / 90), gx = k.c - k.x, gy = k.r - k.y;
+      if (Math.abs(gx) > 0.002 || Math.abs(gy) > 0.002) { k.x += gx * e; k.y += gy * e; } else { k.x = k.c; k.y = k.r; k.settle = false; }
+    }
     return;
   }
   const ox = k.x, oy = k.y, dx = k.vx * dt, dy = k.vy * dt;
@@ -2845,7 +2851,7 @@ function drawFusePips(c, x, y, w, h) {
 
 function drawKip() {
   const k = G.kip, p = kipPos(), s = T;
-  let cx = OX + (p.c + 0.5) * T + shakeX, foot = proj(p.r + 0.62, 0);
+  let cx = OX + (p.c + 0.5) * T + shakeX, foot = proj(p.r + 0.5, 0);
   const moving = k.mt < 1 || k.running, lift = moving ? Math.sin(k.mt * Math.PI) * s * 0.08 : 0;
   if (k.bump > 0) { const b = Math.sin((1 - k.bump / 90) * Math.PI) * s * 0.08; cx += k.bumpDir.dc * b; foot += k.bumpDir.dr * b * 0.8; }
   ctx.save();
@@ -2877,7 +2883,7 @@ function drawKip() {
   if (strip) {
     const h = s * 1.02 * KIP_CELL.h / KIP_CELL.stand, w = h * KIP_CELL.w / KIP_CELL.h;
     const feetOff = h * (KIP_CELL.h - KIP_CELL.base) / KIP_CELL.h;
-    if (k.fall >= 0) { ctx.globalAlpha = 1; foot = proj(p.r + 0.62, 0); }   // the fall frames do the falling
+    if (k.fall >= 0) { ctx.globalAlpha = 1; foot = proj(p.r + 0.5, 0); }   // the fall frames do the falling
     ctx.translate(cx, foot + feetOff + s * 0.04);
     if (k.running && anim && (anim.startsWith("walk") || anim.startsWith("run"))) ctx.rotate(clamp((k.vx || 0) * (k.stepMs || STEP_MS), -1, 1) * 0.04);
     if (G.mark && anim !== "fall") { ctx.shadowColor = "rgba(82, 227, 232, 0.5)"; ctx.shadowBlur = 10; }
@@ -3307,29 +3313,41 @@ function drawDebug() {
 function drawBackgroundIdle() { camY = 0; shakeX = shakeY = 0; drawBackground(); }
 
 // ---------- Input ----------
-let ptr = null, lastTap = 0;
+let ptr = null, lastTap = 0, lastDrag = { vec: null, t: 0 };
 const pointers = new Set();
 const swipeMin = () => Math.max(24, 0.06 * window.innerWidth);
 function localXY(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
 
 stageEl.addEventListener("pointerdown", e => {
   ensureAudio();
+  if (e.isPrimary) pointers.clear();          // a lost pointerup must never leave a ghost finger behind
   pointers.add(e.pointerId);
-  if (pointers.size >= 2) { ptr = null; if (G && (G.phase === "roll" || G.phase === "rise" || G.phase === "crushed")) setPaused(true); return; }
+  // two fingers held together pauses; a stray second touch (thumb landing as the other lifts) never interrupts a run
+  if (pointers.size >= 2) { setTimeout(() => { if (pointers.size >= 2 && G && (G.phase === "roll" || G.phase === "rise" || G.phase === "crushed")) { ptr = null; dragStick = null; setPaused(true); } }, 220); return; }
   ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: now(), mode: "pending", moved: 0, ax: 0, ay: 0, dir: null };
   try { stageEl.setPointerCapture(e.pointerId); } catch (err) {}
+  // thumb lifted and put straight back down (to re-aim, mark or dodge): carry on running the same way, no restart
+  if (G && canAct() && lastDrag.vec && now() - lastDrag.t < 320) {
+    const v = lastDrag.vec, r = 18 + 26 * (v.m == null ? 1 : v.m);
+    ptr.mode = "drag"; ptr.resume = true;
+    // and pick his speed straight back up instead of accelerating from a standstill
+    const k = G.kip; if (k.lastPush && k.mt >= 1) { k.vx = k.lastPush.tx; k.vy = k.lastPush.ty; k.skid = null; }
+    dragStick = { ox: e.clientX - v.x * r, oy: e.clientY - v.y * r, x: e.clientX, y: e.clientY, vec: v };
+  }
 });
 stageEl.addEventListener("pointermove", e => {
   if (!ptr || e.pointerId !== ptr.id) return;
   const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
   ptr.moved = Math.max(ptr.moved, Math.hypot(dx, dy));
   // press and drag anywhere: Kip runs that way for as long as the finger stays down (a floating stick)
-  if (ptr.mode === "pending" && ptr.moved >= 12 && G && canAct()) { ptr.mode = "drag"; dragStick = { ox: ptr.x, oy: ptr.y, x: e.clientX, y: e.clientY, vec: null }; G.kip.wp = null; }
+  if (ptr.mode === "pending" && ptr.moved >= 8 && G && canAct()) { ptr.mode = "drag"; dragStick = { ox: ptr.x, oy: ptr.y, x: e.clientX, y: e.clientY, vec: null }; G.kip.wp = null; }
   if (ptr.mode === "drag" && dragStick) {
     let ddx = e.clientX - dragStick.ox, ddy = e.clientY - dragStick.oy, h = Math.hypot(ddx, ddy);
-    if (h > 56) { dragStick.ox = e.clientX - ddx / h * 56; dragStick.oy = e.clientY - ddy / h * 56; ddx = ddx / h * 56; ddy = ddy / h * 56; h = 56; }
+    // the stick's centre trails the thumb, so turning around never needs a long swipe back across it
+    if (h > 44) { dragStick.ox = e.clientX - ddx / h * 44; dragStick.oy = e.clientY - ddy / h * 44; ddx = ddx / h * 44; ddy = ddy / h * 44; h = 44; }
     dragStick.x = e.clientX; dragStick.y = e.clientY;
-    dragStick.vec = h < 8 ? null : { x: ddx / h, y: ddy / h, m: clamp((h - 6) / 26, 0.4, 1) };
+    dragStick.vec = h < 7 ? (ptr.resume && !ptr.steered ? dragStick.vec : null) : { x: ddx / h, y: ddy / h, m: clamp((h - 6) / 22, 0.4, 1) };
+    if (h >= 7) ptr.steered = true;
   }
 });
 function endPointer(e, cancelled) {
@@ -3339,12 +3357,9 @@ function endPointer(e, cancelled) {
     const p = localXY(e); handleTap(p.x, p.y); lastTap = now();
   }
   if (ptr.mode === "drag") {
-    // a quick flick still nudges Kip one tile that way
-    const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
-    if (!cancelled && G && now() - ptr.t < 160 && Math.hypot(dx, dy) >= swipeMin() * 1.5) {
-      G.kip.vx = G.kip.vy = 0;
-      if (Math.abs(dx) > Math.abs(dy)) queueStep(Math.sign(dx), 0); else queueStep(0, Math.sign(dy));
-    }
+    lastDrag = { vec: dragStick && dragStick.vec, t: now() };
+    // a quick re-touch that never moved was really a tap (a cube, a mark): do that, but never a walk-to
+    if (!cancelled && ptr.resume && ptr.moved < 10 && now() - ptr.t < 200) { const p = localXY(e); handleTap(p.x, p.y, true); }
     dragStick = null;
   }
   ptr = null;
@@ -3352,7 +3367,7 @@ function endPointer(e, cancelled) {
 stageEl.addEventListener("pointerup", e => endPointer(e, false));
 stageEl.addEventListener("pointercancel", e => endPointer(e, true));
 
-function handleTap(x, y) {
+function handleTap(x, y, noWalk) {
   if (!canAct()) return;
   // cubes first, front-most first
   const hits = G.cubes.filter(c => c.state === "idle").map(c => ({ c, geo: cubeGeom(c) }))
@@ -3378,7 +3393,7 @@ function handleTap(x, y) {
   if (markAt(c, r) && occupant(c, r)) { detonate(); return; }
   if (G.greens.some(g => g.c === c && g.r === r) && G.greens.length) { blast(); return; }
   if (c === G.kip.c && r === G.kip.r) { actionButton(); return; }    // tap Kip's own tile to mark it
-  walkTo(c, r);
+  if (!noWalk) walkTo(c, r);
 }
 
 $("#btn-detonate").addEventListener("pointerdown", e => { e.preventDefault(); ensureAudio(); actionButton(); });
